@@ -1,0 +1,37 @@
+[project]
+name = "gov-contracts-ai-backend"
+version = "0.1.0"
+description = "AI-Powered Government Contract Analysis API"
+authors = [
+    {name = "Geda Valentim",email = "gedalias@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi (>=0.109.0,<0.110.0)",
+    "uvicorn[standard] (>=0.27.0,<0.28.0)",
+    "sqlalchemy (>=2.0.25,<3.0.0)",
+    "psycopg2-binary (>=2.9.9,<3.0.0)",
+    "redis (>=5.0.1,<6.0.0)",
+    "pydantic (>=2.5.0,<3.0.0)",
+    "pydantic-settings (>=2.1.0,<3.0.0)",
+    "python-dotenv (>=1.0.0,<2.0.0)",
+    "httpx (>=0.26.0,<0.27.0)",
+    "loguru (>=0.7.2,<0.8.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "pytest (>=8.4.2,<9.0.0)",
+    "pytest-cov (>=7.0.0,<8.0.0)",
+    "pytest-asyncio (>=1.2.0,<2.0.0)",
+    "faker (>=37.11.0,<38.0.0)",
+    "ruff (>=0.14.0,<0.15.0)",
+    "mypy (>=1.18.2,<2.0.0)",
+    "pre-commit (>=4.3.0,<5.0.0)"
+]

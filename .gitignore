@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment
+.env
+.venv
+venv/
+*.env.local
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Data
+ml/data/raw/*
+ml/data/processed/*
+!ml/data/.gitkeep
+*.parquet
+*.csv
+*.pkl
+
+# Models
+ml/models/*
+!ml/models/.gitkeep
+mlruns/
+
+# OS
+.DS_Store
+Thumbs.db
