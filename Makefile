@@ -39,7 +39,7 @@ up:
 	@echo "  - PostgreSQL: localhost:5432"
 	@echo "  - Redis: localhost:6381"
 	@echo "  - MLflow: http://localhost:5000"
-	@echo "  - MinIO: http://localhost:9001"
+	@echo "  - MinIO: http://localhost:9101"
 
 down:
 	docker compose down

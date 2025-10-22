@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: dev123
     ports:
-      - "5432:5432"
+      - "5433:5432"   # PostgreSQL (porta 5433 para evitar conflitos)
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./infrastructure/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
@@ -17,7 +17,8 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - govcontracts-network
+      govcontracts-network:
+        ipv4_address: 172.30.0.5
 
   redis:
     image: redis:7-alpine
@@ -32,7 +33,8 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - govcontracts-network
+      govcontracts-network:
+        ipv4_address: 172.30.0.6
 
   mlflow:
     build:
@@ -42,28 +44,34 @@ services:
     ports:
       - "5000:5000"
     environment:
-      BACKEND_STORE_URI: postgresql://admin:dev123@postgres:5432/mlflow
-      DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
+      BACKEND_STORE_URI: postgresql://admin:dev123@postgres:5432/mlflow   # internal port
+      DEFAULT_ARTIFACT_ROOT: s3://mlflow/artifacts
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
     volumes:
       - mlflow_data:/mlflow
     depends_on:
       postgres:
         condition: service_healthy
+      minio:
+        condition: service_healthy
     networks:
-      - govcontracts-network
+      govcontracts-network:
+        ipv4_address: 172.30.0.7
     command: >
       mlflow server
       --host 0.0.0.0
       --port 5000
       --backend-store-uri postgresql://admin:dev123@postgres:5432/mlflow
-      --default-artifact-root /mlflow/artifacts
+      --default-artifact-root s3://mlflow/artifacts
 
   minio:
     image: minio/minio:latest
     container_name: govcontracts-minio
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9100:9000"   # S3 API (porta 9100 externa -> 9000 interna)
+      - "9101:9001"   # Console UI (porta 9101 externa -> 9001 interna)
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -75,6 +83,290 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
+    restart: unless-stopped
+    networks:
+      govcontracts-network:
+        ipv4_address: 172.30.0.10
+
+  # Container para criar buckets automaticamente
+  minio-init:
+    image: minio/mc:latest
+    container_name: govcontracts-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Aguardando MinIO iniciar...';
+      sleep 5;
+
+      echo 'Configurando alias MinIO...';
+      mc alias set myminio http://minio:9000 minioadmin minioadmin;
+
+      echo 'Criando buckets...';
+      mc mb --ignore-existing myminio/lh-bronze;
+      mc mb --ignore-existing myminio/lh-silver;
+      mc mb --ignore-existing myminio/lh-gold;
+      mc mb --ignore-existing myminio/mlflow;
+      mc mb --ignore-existing myminio/backups;
+      mc mb --ignore-existing myminio/tmp;
+
+      echo 'Habilitando versioning...';
+      mc version enable myminio/lh-bronze;
+      mc version enable myminio/lh-silver;
+      mc version enable myminio/lh-gold;
+      mc version enable myminio/mlflow;
+
+      echo 'Configurando políticas de acesso...';
+      mc anonymous set download myminio/lh-bronze;
+
+      echo 'Configurando lifecycle para tmp (auto-delete após 7 dias)...';
+      mc ilm add --expiry-days 7 myminio/tmp;
+
+      echo '✅ MinIO configurado com sucesso!';
+      exit 0;
+      "
+    networks:
+      - govcontracts-network
+
+  opensearch:
+    image: opensearchproject/opensearch:3
+    container_name: govcontracts-opensearch
+    environment:
+      - cluster.name=govcontracts-cluster
+      - node.name=opensearch-node1
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "DISABLE_INSTALL_DEMO_CONFIG=true"
+      - "DISABLE_SECURITY_PLUGIN=true"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    ports:
+      - "9201:9200"   # REST API (porta 9201 para evitar conflitos)
+      - "9601:9600"   # Performance Analyzer
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      govcontracts-network:
+        ipv4_address: 172.30.0.11
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:3
+    container_name: govcontracts-opensearch-dashboards
+    ports:
+      - "5602:5601"   # Dashboards UI (porta 5602 para evitar conflitos)
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      govcontracts-network:
+        ipv4_address: 172.30.0.12
+
+  # Airflow - Orquestração de pipelines de dados
+  airflow-webserver:
+    image: apache/airflow:3.1.0-python3.11
+    container_name: govcontracts-airflow-webserver
+    command: webserver
+    ports:
+      - "8081:8080"   # Webserver UI (porta 8081 para evitar conflitos)
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://admin:dev123@postgres:5432/airflow
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://admin:dev123@postgres:5432/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+      AIRFLOW__WEBSERVER__SECRET_KEY: 'govcontracts-secret-key-change-in-prod'
+      _PIP_ADDITIONAL_REQUIREMENTS: 'apache-airflow-providers-amazon boto3 s3fs'
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/config:/opt/airflow/config
+    user: "50000:0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      govcontracts-network:
+        ipv4_address: 172.30.0.20
+
+  airflow-scheduler:
+    image: apache/airflow:3.1.0-python3.11
+    container_name: govcontracts-airflow-scheduler
+    command: scheduler
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://admin:dev123@postgres:5432/airflow
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://admin:dev123@postgres:5432/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      _PIP_ADDITIONAL_REQUIREMENTS: 'apache-airflow-providers-amazon boto3 s3fs'
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/config:/opt/airflow/config
+    user: "50000:0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      govcontracts-network:
+        ipv4_address: 172.30.0.21
+
+  airflow-worker:
+    image: apache/airflow:3.1.0-python3.11
+    container_name: govcontracts-airflow-worker
+    command: celery worker
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://admin:dev123@postgres:5432/airflow
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://admin:dev123@postgres:5432/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      _PIP_ADDITIONAL_REQUIREMENTS: 'apache-airflow-providers-amazon boto3 s3fs'
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/config:/opt/airflow/config
+    user: "50000:0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d celery@$${HOSTNAME} || celery --app airflow.executors.celery_executor.app inspect ping -d celery@$${HOSTNAME}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      govcontracts-network:
+        ipv4_address: 172.30.0.22
+
+  airflow-triggerer:
+    image: apache/airflow:3.1.0-python3.11
+    container_name: govcontracts-airflow-triggerer
+    command: triggerer
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://admin:dev123@postgres:5432/airflow
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://admin:dev123@postgres:5432/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      _PIP_ADDITIONAL_REQUIREMENTS: 'apache-airflow-providers-amazon boto3 s3fs'
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/config:/opt/airflow/config
+    user: "50000:0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type TriggererJob --hostname \"$${HOSTNAME}\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      govcontracts-network:
+        ipv4_address: 172.30.0.23
+
+  airflow-init:
+    image: apache/airflow:3.1.0-python3.11
+    container_name: govcontracts-airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        if [[ -z "$${AIRFLOW_UID}" ]]; then
+          echo "AIRFLOW_UID not set, using default 50000"
+          export AIRFLOW_UID=50000
+        fi
+        mkdir -p /sources/logs /sources/dags /sources/plugins
+        chown -R "$${AIRFLOW_UID}:0" /sources/{logs,dags,plugins}
+        exec /entrypoint airflow version
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://admin:dev123@postgres:5432/airflow
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://admin:dev123@postgres:5432/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: airflow
+      _AIRFLOW_WWW_USER_PASSWORD: airflow
+      _PIP_ADDITIONAL_REQUIREMENTS: ''
+    user: "0:0"
+    volumes:
+      - ./airflow:/sources
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - govcontracts-network
 
@@ -83,7 +375,11 @@ volumes:
   redis_data:
   mlflow_data:
   minio_data:
+  opensearch_data:
 
 networks:
   govcontracts-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16  # Subnet customizada para evitar conflitos

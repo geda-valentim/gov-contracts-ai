@@ -1,22 +1,40 @@
-
-# 🚀 Projeto Completo: Sistema de Detecção de Sobrepreço em Licitações Públicas
-
-
 # 🏛️ Gov Contracts AI
 
-> AI-Powered Fraud Detection in Government Procurement
+> **Sistema Open Source de Auditoria em Licitações Governamentais Brasileiras**
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)]()
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-green.svg)]()
 [![Next.js](https://img.shields.io/badge/Next.js-14-black)]()
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)]()
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)]()
+[![Open Source](https://img.shields.io/badge/Open%20Source-%E2%9D%A4-brightgreen)]()
 
-Detecting **overpricing and anomalies** in government contracts using **Machine Learning** and **Generative AI**.
+**Gerando achados de auditoria automatizados em licitações públicas** usando **Machine Learning** (XGBoost) + **IA Generativa** (Llama 3.1) + **NLP** (BERT).
 
-[🎥 Demo](https://youtube.com/...) | [📊 Live App](https://gov-contracts-ai.vercel.app) | [📖 Docs](https://docs.gov-contracts-ai.com)
+---
 
+## 💡 Proposta de Valor
 
-## ML Engineer + AI Engineer Portfolio Project
+**Problema:** Bilhões perdidos anualmente em irregularidades em licitações (TCU)
+
+**Solução:** Análise automatizada de 50k+ licitações com 85%+ de precisão
+**Impacto:** Auditoria proativa antes da homologação, explicações em português, 100% auditável
+
+---
+
+## 🌟 Diferenciais
+
+| Aspecto | Soluções Existentes | Gov Contracts AI |
+|---------|---------------------|------------------|
+| **Open Source** | ❌ Proprietário | ✅ GPL v3.0 |
+| **Soberania** | ❌ Cloud externas | ✅ On-premises |
+| **IA Generativa** | ❌ Apenas ML | ✅ LLM + ML híbrido |
+| **Editais PDF** | ❌ Não analisa | ✅ NLP avançado |
+| **Preços Mercado** | ❌ Sem referência | ✅ Web scraping |
+| **Explicabilidade** | ⚠️ Básica | ✅ SHAP + LLM |
+
+---
+
+## 📊 Portfolio Project - ML/AI Engineer
 
 ---
 

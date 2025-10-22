@@ -167,8 +167,8 @@ make setup   # First-time setup
 - PostgreSQL: `localhost:5432` (user: admin, pass: dev123, db: govcontracts)
 - Redis: `localhost:6381` (Note: 6379 may be in use by other services)
 - MLflow UI: `http://localhost:5000`
-- MinIO Console: `http://localhost:9001` (credentials: minioadmin/minioadmin)
-- MinIO API: `http://localhost:9000`
+- MinIO Console: `http://localhost:9101` (credentials: minioadmin/minioadmin)
+- MinIO API: `http://localhost:9100`
 
 **Terraform:**
 ```bash
