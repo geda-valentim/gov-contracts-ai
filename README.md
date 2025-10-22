@@ -8,16 +8,16 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)]()
 [![Open Source](https://img.shields.io/badge/Open%20Source-%E2%9D%A4-brightgreen)]()
 
-**Gerando achados de auditoria automatizados em licitações públicas** usando **Machine Learning** (XGBoost) + **IA Generativa** (Llama 3.1) + **NLP** (BERT).
+**Análise automatizada de riscos em licitações públicas com geração de alertas** usando **Machine Learning** (XGBoost) + **IA Generativa** (Llama 3.1) + **NLP** (BERT).
 
 ---
 
 ## 💡 Proposta de Valor
 
-**Problema:** Bilhões perdidos anualmente em irregularidades em licitações (TCU)
+**Problema:** Bilhões em riscos e fragilidades em processos licitatórios (TCU)
 
-**Solução:** Análise automatizada de 50k+ licitações com 85%+ de precisão
-**Impacto:** Auditoria proativa antes da homologação, explicações em português, 100% auditável
+**Solução:** Análise automatizada de 50k+ licitações com emissão de alertas de criticidade
+**Impacto:** Atuação preventiva antes da homologação, fundamentação clara dos alertas, 100% auditável
 
 ---
 
@@ -57,15 +57,15 @@
 
 ### Problema de Negócio
 
-O Brasil gasta anualmente mais de **R$ 500 bilhões** em licitações públicas. Estudos do TCU (Tribunal de Contas da União) indicam que até **15% dos contratos** apresentam indícios de sobrepreço, representando bilhões em desperdício de recursos públicos.
+O Brasil gasta anualmente mais de **R$ 500 bilhões** em licitações públicas. Estudos do TCU (Tribunal de Contas da União) indicam que uma parcela significativa dos contratos apresenta fragilidades e riscos, incluindo sobrepreço, direcionamento e especificações inadequadas, representando bilhões em potencial desperdício de recursos públicos.
 
 ### Solução Proposta
 
 Sistema end-to-end que combina:
-- **ML Clássico** (XGBoost) para detecção quantitativa de anomalias de preço
-- **AI Generativa** (LLMs) para análise qualitativa de editais e explicabilidade
-- **NLP** para identificar cláusulas restritivas e padrões textuais suspeitos
-- **RAG** para busca semântica e análise comparativa
+- **ML Clássico** (XGBoost) para análise quantitativa e emissão de alertas de risco
+- **AI Generativa** (LLMs) para análise qualitativa de editais e fundamentação dos alertas
+- **NLP** para identificar cláusulas restritivas e padrões de risco em documentos
+- **RAG** para busca semântica e análise comparativa de processos similares
 
 ### Valor para Portfolio
 

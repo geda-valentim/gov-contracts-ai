@@ -1,6 +1,6 @@
 # Gov Contracts AI - Backend API
 
-FastAPI backend for the Gov Contracts AI fraud detection system.
+FastAPI backend for the Gov Contracts AI procurement audit system.
 
 ## Setup
 

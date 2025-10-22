@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Gov Contracts AI** - AI-powered fraud detection system for Brazilian government procurement contracts. The system combines:
-- **ML (XGBoost)**: Quantitative overpricing detection
+**Gov Contracts AI** - AI-powered audit system for Brazilian government procurement contracts. The system combines:
+- **ML (XGBoost)**: Detection of pricing irregularities
 - **AI Generative (Claude/GPT-4)**: Qualitative analysis and explainability
 - **NLP (BERT)**: Analysis of restrictive clauses in procurement documents
 - **RAG (Pinecone)**: Semantic search across procurement records

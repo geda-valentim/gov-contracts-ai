@@ -1,5 +1,5 @@
 # Gov Contracts AI - Product Requirements Document (PRD)
-## Sistema de Auditoria Automatizada em Licitações Governamentais
+## Sistema de Análise de Riscos e Alertas em Licitações Governamentais
 
 **Versão:** 2.2
 **Data:** 22 de Outubro de 2025
@@ -230,7 +230,7 @@ Necessidades:
 └─ Acesso a contratos similares
 
 Como o sistema ajuda:
-✅ Dashboard com top 100 suspeitas (fraud_score)
+✅ Dashboard com top 100 suspeitas (risk_score)
 ✅ Explicação em português de cada irregularidade
 ✅ Comparação automática com mercado
 ✅ Busca semântica de editais similares
@@ -284,7 +284,7 @@ Necessidades:
 └─ Casos com maior impacto jornalístico
 
 Como o sistema ajuda:
-✅ API pública REST (GET /contracts?fraud_score>0.9)
+✅ API pública REST (GET /contracts?risk_score>0.9)
 ✅ Exports em múltiplos formatos
 ✅ Grafos de redes de empresas (futuro v2.0)
 ✅ Ranking por valor total (maior impacto)
@@ -896,7 +896,7 @@ FONTES EXTERNAS (APIs, PDFs, Scraping)
 │                                                                │
 │  8. ML INFERENCE                                               │
 │  ├─ Airflow DAG: Batch Predict (daily 5 AM)                   │
-│  ├─ XGBoost.predict_proba() → fraud_score                     │
+│  ├─ XGBoost.predict_proba() → risk_score                     │
 │  ├─ SHAP values (top 100)                                     │
 │  └─ Output: PostgreSQL + OpenSearch updates                   │
 │                                                                │
@@ -965,7 +965,7 @@ DIA 1 - 04:00: Gold Features (37 min)
          ↓
 DIA 1 - 04:40: ML Inference (12 min)
 ├─ Load XGBoost model (MLflow)
-├─ Batch predict (fraud_score)
+├─ Batch predict (risk_score)
 ├─ SHAP values (top 100)
 ├─ LLM explanations (top 20)
 └─ Update: PostgreSQL + OpenSearch
@@ -973,7 +973,7 @@ DIA 1 - 04:40: ML Inference (12 min)
          ↓
 DIA 1 - 05:00: ✅ DISPONÍVEL PARA CONSULTA
 ├─ Dashboard: Top 100 suspeitas
-├─ API: GET /contracts?fraud_score>0.8
+├─ API: GET /contracts?risk_score>0.8
 ├─ OpenSearch: Semantic search
 └─ PostgreSQL: Queries rápidas
 
