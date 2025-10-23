@@ -57,13 +57,16 @@ def fetch_pncp_data(**context) -> dict:
     This is a thin wrapper that:
     1. Extracts Airflow context
     2. Calls standalone service
-    3. Pushes results to XCom
+    3. Saves data to temp storage (NOT XCom to avoid DB bloat)
+    4. Pushes only S3 reference to XCom (<1KB)
     """
     # Airflow 3.x: use logical_date instead of execution_date
     # Fallback chain: logical_date -> data_interval_start -> current time
     execution_date = (
         context.get("logical_date") or context.get("data_interval_start") or datetime.now(UTC)
     )
+    dag_run = context.get("dag_run")
+    execution_id = dag_run.run_id if dag_run else execution_date.strftime("%Y%m%d_%H%M%S")
 
     # Call standalone service (no Airflow dependencies)
     service = PNCPIngestionService()
@@ -72,11 +75,26 @@ def fetch_pncp_data(**context) -> dict:
         modalidades=ModalidadeContratacao.get_all(),
     )
 
-    # Push to XCom for next task
-    context["task_instance"].xcom_push(key="fetched_data", value=result["data"])
-    context["task_instance"].xcom_push(key="metadata", value=result["metadata"])
+    # ✅ SOLUTION: Save data to temp storage instead of XCom
+    storage = get_storage_client()
+    temp_key = storage.upload_temp(
+        data=result["data"],
+        execution_id=execution_id,
+        stage="raw",
+        format="parquet",
+    )
 
-    return result["metadata"]
+    print(
+        f"📦 Saved {len(result['data'])} records to temp storage: {temp_key} "
+        f"(XCom stores only reference, not data)"
+    )
+
+    # ✅ XCom only stores lightweight metadata + S3 reference
+    return {
+        "temp_key": temp_key,
+        "metadata": result["metadata"],
+        "record_count": len(result["data"]),
+    }
 
 
 def transform_data(**context) -> dict:
@@ -84,19 +102,32 @@ def transform_data(**context) -> dict:
     Airflow task wrapper: Transform and validate data with incremental state filtering.
 
     This is a thin wrapper that:
-    1. Pulls data from XCom
-    2. Loads state to filter duplicates
-    3. Filters only NEW records (not already processed)
-    4. Transforms and validates
-    5. Updates state with new IDs
-    6. Pushes results to XCom
+    1. Reads S3 reference from XCom (not data itself)
+    2. Loads data from temp storage
+    3. Loads state to filter duplicates
+    4. Filters only NEW records (not already processed)
+    5. Transforms and validates
+    6. Updates state with new IDs
+    7. Saves to temp storage (not XCom)
     """
     task_instance = context["task_instance"]
     # Airflow 3.x uses 'logical_date' instead of 'execution_date'
     execution_date = context.get("logical_date") or context.get("data_interval_start")
+    dag_run = context.get("dag_run")
+    execution_id = dag_run.run_id if dag_run else execution_date.strftime("%Y%m%d_%H%M%S")
 
-    # Get data from previous task
-    raw_data = task_instance.xcom_pull(task_ids="fetch_pncp_data", key="fetched_data")
+    # ✅ Get S3 reference from XCom (lightweight)
+    fetch_result = task_instance.xcom_pull(task_ids="fetch_pncp_data")
+
+    if not fetch_result or not fetch_result.get("temp_key"):
+        return {"transformed": False, "reason": "no_data"}
+
+    # ✅ Read actual data from temp storage (not from XCom)
+    storage = get_storage_client()
+    raw_df = storage.read_temp(bucket=storage.BUCKET_BRONZE, key=fetch_result["temp_key"])
+
+    # Convert DataFrame back to list of dicts for processing
+    raw_data = raw_df.to_dict(orient="records")
 
     if not raw_data:
         return {"transformed": False, "reason": "no_data"}
@@ -138,7 +169,7 @@ def transform_data(**context) -> dict:
     df = service.to_dataframe(new_records, deduplicate=False)
 
     # Add metadata
-    metadata = task_instance.xcom_pull(task_ids="fetch_pncp_data", key="metadata")
+    metadata = fetch_result.get("metadata", {})
     df = service.add_metadata_columns(df, metadata)
 
     # ===== UPDATE STATE =====
@@ -159,13 +190,20 @@ def transform_data(**context) -> dict:
 
     print(f"✅ State updated: {len(new_ids)} new IDs added")
 
-    # Store DataFrame in context for next task
-    task_instance.xcom_push(key="dataframe", value=df)
-    task_instance.xcom_push(key="validation_report", value=validation_report)
-    task_instance.xcom_push(key="filter_stats", value=filter_stats)
+    # ✅ Store DataFrame in temp storage (not XCom)
+    transformed_key = storage.upload_temp(
+        data=df, execution_id=execution_id, stage="transformed", format="parquet"
+    )
 
+    print(
+        f"📦 Saved {len(df)} transformed records to temp storage: {transformed_key} "
+        f"(XCom stores only reference)"
+    )
+
+    # ✅ XCom only stores lightweight metadata + references
     return {
         "transformed": True,
+        "temp_key": transformed_key,  # S3 reference only
         "record_count": len(df),
         "validation": validation_report,
         "filter_stats": filter_stats,
@@ -190,15 +228,22 @@ def upload_to_bronze(**context) -> dict:
         context.get("logical_date") or context.get("data_interval_start") or datetime.now(UTC)
     )
 
-    # Get DataFrame from previous task
-    df = task_instance.xcom_pull(task_ids="transform_data", key="dataframe")
+    # ✅ Get S3 reference from XCom (lightweight)
+    transform_result = task_instance.xcom_pull(task_ids="transform_data")
+
+    if not transform_result or not transform_result.get("temp_key"):
+        return {"uploaded": False, "reason": "no_data"}
+
+    # ✅ Read DataFrame from temp storage
+    storage = get_storage_client()
+    df = storage.read_temp(
+        bucket=storage.BUCKET_BRONZE, key=transform_result["temp_key"]
+    )
 
     if df is None or len(df) == 0:
         return {"uploaded": False, "reason": "no_data"}
 
-    # Upload DataFrame directly to Bronze as Parquet (default format)
-    # No need to convert to JSON - Parquet handles pandas types natively
-    storage = get_storage_client()
+    # Upload DataFrame to final Bronze location
     s3_key = storage.upload_to_bronze(
         data=df,  # Pass DataFrame directly
         source="pncp",
@@ -215,6 +260,26 @@ def upload_to_bronze(**context) -> dict:
         "record_count": len(df),
         "format": "parquet",
     }
+
+
+def cleanup_temp_files(**context) -> dict:
+    """
+    Airflow task wrapper: Clean up temporary files.
+
+    This task runs at the end (success or failure) to clean up
+    temporary files created during the DAG execution.
+    """
+    dag_run = context.get("dag_run")
+    execution_id = dag_run.run_id if dag_run else context.get("logical_date").strftime(
+        "%Y%m%d_%H%M%S"
+    )
+
+    storage = get_storage_client()
+    deleted = storage.cleanup_temp(execution_id=execution_id)
+
+    print(f"🧹 Cleaned up {deleted} temporary files for execution {execution_id}")
+
+    return {"deleted_files": deleted, "execution_id": execution_id}
 
 
 def validate_ingestion(**context) -> dict:
@@ -322,5 +387,14 @@ with DAG(
         python_callable=validate_ingestion,
     )
 
+    # Task 5: Cleanup temporary files
+    # This runs ALWAYS (even if previous tasks fail) to clean up temp storage
+    task_cleanup = PythonOperator(
+        task_id="cleanup_temp_files",
+        python_callable=cleanup_temp_files,
+        trigger_rule="all_done",  # Run regardless of upstream success/failure
+    )
+
     # Define task dependencies
-    task_fetch >> task_transform >> task_upload >> task_validate
+    # Cleanup runs after validate (regardless of success/failure)
+    task_fetch >> task_transform >> task_upload >> task_validate >> task_cleanup

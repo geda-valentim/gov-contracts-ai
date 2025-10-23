@@ -613,6 +613,152 @@ class MinIOClient:
             logger.error(f"Error writing JSON to {key}: {e}")
             raise
 
+    def upload_temp(
+        self,
+        data: Union[pd.DataFrame, Dict, List[Dict]],
+        execution_id: str,
+        stage: str,
+        format: str = "parquet",
+    ) -> str:
+        """
+        Upload temporary data for inter-task communication.
+
+        This method stores intermediate data in a temporary location
+        instead of using XCom, preventing Airflow database bloat.
+
+        Args:
+            data: Data to upload (DataFrame, dict, or list of dicts)
+            execution_id: Unique execution identifier (e.g., DAG run ID)
+            stage: Stage name (e.g., 'raw', 'transformed')
+            format: Data format ('parquet' or 'json', default: 'parquet')
+
+        Returns:
+            S3 key for the temporary file
+
+        Example:
+            >>> client = MinIOClient()
+            >>> key = client.upload_temp(
+            ...     data=df,
+            ...     execution_id="20251023_120000",
+            ...     stage="raw",
+            ...     format="parquet"
+            ... )
+            >>> # Returns: "_temp/20251023_120000/raw.parquet"
+        """
+        # Generate temporary key
+        extension = "parquet" if format == "parquet" else "json"
+        temp_key = f"_temp/{execution_id}/{stage}.{extension}"
+
+        # Convert to DataFrame if needed
+        if isinstance(data, pd.DataFrame):
+            df = data
+        elif isinstance(data, list):
+            df = pd.DataFrame(data)
+        elif isinstance(data, dict):
+            df = pd.DataFrame([data])
+        else:
+            raise ValueError(f"Unsupported data type for temp upload: {type(data)}")
+
+        # Upload based on format
+        if format == "parquet":
+            # Upload as Parquet
+            buffer = io.BytesIO()
+            df.to_parquet(buffer, engine="pyarrow", compression="snappy", index=False)
+            buffer.seek(0)
+            self.upload_fileobj(buffer, self.BUCKET_BRONZE, temp_key)
+            logger.info(
+                f"Uploaded temp data (parquet): {len(df)} rows -> {temp_key} "
+                f"(size: {buffer.getbuffer().nbytes / 1024:.1f} KB)"
+            )
+        else:
+            # Upload as JSON
+            json_data = df.to_json(orient="records", date_format="iso")
+            file_obj = io.BytesIO(json_data.encode("utf-8"))
+            self.upload_fileobj(file_obj, self.BUCKET_BRONZE, temp_key)
+            logger.info(
+                f"Uploaded temp data (json): {len(df)} rows -> {temp_key} "
+                f"(size: {len(json_data) / 1024:.1f} KB)"
+            )
+
+        return temp_key
+
+    def read_temp(self, bucket: str, key: str) -> Union[pd.DataFrame, Dict, List[Dict]]:
+        """
+        Read temporary data from storage.
+
+        Args:
+            bucket: Bucket name
+            key: S3 key (from upload_temp)
+
+        Returns:
+            Data (DataFrame for parquet, dict/list for JSON)
+
+        Example:
+            >>> client = MinIOClient()
+            >>> df = client.read_temp(
+            ...     bucket=client.BUCKET_BRONZE,
+            ...     key="_temp/20251023_120000/raw.parquet"
+            ... )
+        """
+        # Detect format from extension
+        if key.endswith(".parquet"):
+            df = self.read_parquet_from_s3(bucket, key)
+            logger.info(f"Read temp data (parquet): {len(df)} rows from {key}")
+            return df
+        elif key.endswith(".json"):
+            data = self.read_json_from_s3(bucket, key)
+            logger.info(f"Read temp data (json): {key}")
+            return data
+        else:
+            raise ValueError(f"Unsupported temp file format: {key}")
+
+    def cleanup_temp(self, execution_id: str, bucket: Optional[str] = None) -> int:
+        """
+        Clean up temporary files for a specific execution.
+
+        Args:
+            execution_id: Execution identifier
+            bucket: Bucket to clean (defaults to BUCKET_BRONZE)
+
+        Returns:
+            Number of files deleted
+
+        Example:
+            >>> client = MinIOClient()
+            >>> deleted = client.cleanup_temp("20251023_120000")
+            >>> print(f"Deleted {deleted} temporary files")
+        """
+        if bucket is None:
+            bucket = self.BUCKET_BRONZE
+
+        prefix = f"_temp/{execution_id}/"
+        deleted = 0
+
+        try:
+            # List all objects with this prefix
+            objects = self.list_objects(bucket, prefix=prefix)
+
+            if objects:
+                # Delete each object
+                for obj in objects:
+                    try:
+                        self.s3_client.delete_object(Bucket=bucket, Key=obj["Key"])
+                        deleted += 1
+                        logger.debug(f"Deleted temp file: {obj['Key']}")
+                    except Exception as e:
+                        logger.warning(f"Failed to delete {obj['Key']}: {e}")
+
+                logger.info(
+                    f"Cleaned up {deleted} temporary files for execution {execution_id}"
+                )
+            else:
+                logger.info(f"No temporary files found for execution {execution_id}")
+
+        except Exception as e:
+            logger.error(f"Error during temp cleanup: {e}")
+
+        return deleted
+
     def ensure_buckets_exist(self) -> None:
         """
         Ensure all required Data Lake buckets exist.

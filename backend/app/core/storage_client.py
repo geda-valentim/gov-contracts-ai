@@ -129,6 +129,81 @@ class StorageClient(ABC):
         """Write JSON data to storage."""
         pass
 
+    @abstractmethod
+    def upload_temp(
+        self,
+        data: Union[pd.DataFrame, Dict, List[Dict]],
+        execution_id: str,
+        stage: str,
+        format: str = "parquet",
+    ) -> str:
+        """
+        Upload temporary data for inter-task communication.
+
+        This method stores intermediate data in a temporary location
+        instead of using XCom, preventing database bloat.
+
+        Args:
+            data: Data to upload (DataFrame, dict, or list of dicts)
+            execution_id: Unique execution identifier (e.g., DAG run ID)
+            stage: Stage name (e.g., 'raw', 'transformed')
+            format: Data format ('parquet' or 'json', default: 'parquet')
+
+        Returns:
+            S3 key for the temporary file
+
+        Example:
+            >>> storage = get_storage_client()
+            >>> key = storage.upload_temp(
+            ...     data=df,
+            ...     execution_id="20251023_120000",
+            ...     stage="raw",
+            ...     format="parquet"
+            ... )
+            >>> # Returns: "_temp/20251023_120000/raw.parquet"
+        """
+        pass
+
+    @abstractmethod
+    def read_temp(self, bucket: str, key: str) -> Union[pd.DataFrame, Dict, List[Dict]]:
+        """
+        Read temporary data from storage.
+
+        Args:
+            bucket: Bucket name
+            key: S3 key (from upload_temp)
+
+        Returns:
+            Data (DataFrame for parquet, dict/list for JSON)
+
+        Example:
+            >>> storage = get_storage_client()
+            >>> df = storage.read_temp(
+            ...     bucket=storage.BUCKET_BRONZE,
+            ...     key="_temp/20251023_120000/raw.parquet"
+            ... )
+        """
+        pass
+
+    @abstractmethod
+    def cleanup_temp(self, execution_id: str, bucket: Optional[str] = None) -> int:
+        """
+        Clean up temporary files for a specific execution.
+
+        Args:
+            execution_id: Execution identifier
+            bucket: Bucket to clean (defaults to BUCKET_BRONZE)
+
+        Returns:
+            Number of files deleted
+
+        Example:
+            >>> storage = get_storage_client()
+            >>> deleted = storage.cleanup_temp("20251023_120000")
+            >>> print(f"Deleted {deleted} temporary files")
+        """
+        pass
+
 
 class MinIOStorageClient(StorageClient):
     """
@@ -185,6 +260,15 @@ class MinIOStorageClient(StorageClient):
 
     def write_json_to_s3(self, bucket, key, data):
         return self._client.write_json_to_s3(bucket, key, data)
+
+    def upload_temp(self, data, execution_id, stage, format="parquet") -> str:
+        return self._client.upload_temp(data, execution_id, stage, format)
+
+    def read_temp(self, bucket, key):
+        return self._client.read_temp(bucket, key)
+
+    def cleanup_temp(self, execution_id, bucket=None):
+        return self._client.cleanup_temp(execution_id, bucket)
 
 
 class S3StorageClient(StorageClient):
@@ -390,6 +474,89 @@ class S3StorageClient(StorageClient):
         )
 
         return key
+
+    def upload_temp(self, data, execution_id, stage, format="parquet") -> str:
+        """Upload temporary data to S3."""
+        import io
+
+        # Generate temporary key
+        extension = "parquet" if format == "parquet" else "json"
+        temp_key = f"_temp/{execution_id}/{stage}.{extension}"
+
+        # Convert to DataFrame if needed
+        if isinstance(data, pd.DataFrame):
+            df = data
+        elif isinstance(data, (list, dict)):
+            df = pd.DataFrame(data) if isinstance(data, list) else pd.DataFrame([data])
+        else:
+            raise ValueError(f"Unsupported data type for temp upload: {type(data)}")
+
+        # Upload based on format
+        if format == "parquet":
+            buffer = io.BytesIO()
+            df.to_parquet(buffer, engine="pyarrow", compression="snappy", index=False)
+            buffer.seek(0)
+
+            self.s3_client.put_object(
+                Bucket=self.BUCKET_BRONZE,
+                Key=temp_key,
+                Body=buffer.getvalue(),
+                ContentType="application/x-parquet",
+            )
+        else:
+            json_data = df.to_json(orient="records", date_format="iso")
+            json_bytes = json_data.encode("utf-8")
+
+            self.s3_client.put_object(
+                Bucket=self.BUCKET_BRONZE,
+                Key=temp_key,
+                Body=json_bytes,
+                ContentType="application/json",
+            )
+
+        return temp_key
+
+    def read_temp(self, bucket, key):
+        """Read temporary data from S3."""
+        import io
+
+        # Detect format from extension
+        if key.endswith(".parquet"):
+            response = self.s3_client.get_object(Bucket=bucket, Key=key)
+            return pd.read_parquet(io.BytesIO(response["Body"].read()))
+        elif key.endswith(".json"):
+            return self.read_json_from_s3(bucket, key)
+        else:
+            raise ValueError(f"Unsupported temp file format: {key}")
+
+    def cleanup_temp(self, execution_id, bucket=None):
+        """Clean up temporary files from S3."""
+        if bucket is None:
+            bucket = self.BUCKET_BRONZE
+
+        prefix = f"_temp/{execution_id}/"
+        deleted = 0
+
+        try:
+            # List all objects with this prefix
+            response = self.s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+
+            if "Contents" in response:
+                # Delete all objects
+                objects_to_delete = [
+                    {"Key": obj["Key"]} for obj in response["Contents"]
+                ]
+
+                if objects_to_delete:
+                    self.s3_client.delete_objects(
+                        Bucket=bucket, Delete={"Objects": objects_to_delete}
+                    )
+                    deleted = len(objects_to_delete)
+
+        except Exception as e:
+            print(f"Warning: Failed to cleanup temp files: {e}")
+
+        return deleted
 
 
 def get_storage_client(
