@@ -98,6 +98,12 @@ Examples:
         help="Enable auto-resume mode (continues from last checkpoint)",
     )
     parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=50,
+        help="Save checkpoint every N contratacoes (default: 50)",
+    )
+    parser.add_argument(
         "--format",
         choices=["json", "parquet"],
         default="parquet",
@@ -156,6 +162,7 @@ Examples:
             max_contratacoes=args.max_contratacoes,
             batch_size=args.batch_size,
             auto_resume=args.auto_resume,
+            checkpoint_every=args.checkpoint_every,
         )
 
         enriched_contratacoes = result["data"]

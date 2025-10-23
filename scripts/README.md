@@ -131,6 +131,9 @@ python scripts/run_pncp_details_ingestion.py --date 20251022
 # Auto-resume: processa em batches e continua de onde parou
 python scripts/run_pncp_details_ingestion.py --date 20251022 --batch-size 100 --auto-resume
 
+# Configurar checkpoints a cada 100 contratações (reduz uso de memória)
+python scripts/run_pncp_details_ingestion.py --date 20251022 --checkpoint-every 100 --auto-resume
+
 # Teste com limite de contratações
 python scripts/run_pncp_details_ingestion.py --date 20251022 --max-contratacoes 10
 
@@ -148,8 +151,13 @@ python scripts/run_pncp_details_ingestion.py --date 20251022 --verbose
 - ✅ Lê contratações da camada Bronze
 - ✅ Busca itens via API PNCP: `/v1/orgaos/{cnpj}/compras/{ano}/{seq}/itens`
 - ✅ Busca arquivos via API: `/v1/orgaos/{cnpj}/compras/{ano}/{seq}/arquivos`
+- ✅ **CHECKPOINTS INCREMENTAIS**: Salva a cada N contratações (padrão: 50)
+- ✅ **AUTO-RESUME**: Retoma de onde parou em caso de falha
+- ✅ **BATCH PROCESSING**: Processa N contratações por execução
+- ✅ **BAIXO USO DE MEMÓRIA**: Salva progressivamente em Parquet (mode=append)
+- ✅ **RECUPERAÇÃO AUTOMÁTICA**: Em caso de crash, dados já salvos nos checkpoints
 - ✅ State management granular (itens e arquivos separados)
-- ✅ Estrutura nested/hierárquica (1 JSON por dia)
+- ✅ Estrutura nested/hierárquica (Parquet com colunas aninhadas)
 - ✅ Rate limiting respeitoso (0.5s entre requests)
 - ✅ Processamento sequencial (sem threads)
 

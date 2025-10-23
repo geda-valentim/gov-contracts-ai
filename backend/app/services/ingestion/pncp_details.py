@@ -213,6 +213,7 @@ class PNCPDetailsIngestionService:
         max_contratacoes: Optional[int] = None,
         batch_size: Optional[int] = None,
         auto_resume: bool = False,
+        checkpoint_every: int = 50,
     ) -> Dict:
         """
         Fetch details (items + arquivos) for all contratacoes from a specific date.
@@ -222,6 +223,7 @@ class PNCPDetailsIngestionService:
             max_contratacoes: Optional limit for testing (default: all)
             batch_size: Number of contratacoes to process per execution (auto-resume mode)
             auto_resume: If True, automatically resume from last checkpoint
+            checkpoint_every: Save to Bronze every N contratacoes (default: 50)
 
         Returns:
             Dict with:
@@ -315,12 +317,13 @@ class PNCPDetailsIngestionService:
 
         logger.info(f"Processing {len(contratacoes)} contratacoes...")
 
-        # 2. Fetch details for each contratacao
+        # 2. Fetch details for each contratacao with incremental checkpoints
         enriched_contratacoes = []
         total_itens = 0
         total_arquivos = 0
         api_calls = 0
         errors = 0
+        checkpoints_saved = 0
 
         for idx, contratacao in enumerate(contratacoes, 1):
             try:
@@ -334,8 +337,22 @@ class PNCPDetailsIngestionService:
 
                 enriched_contratacoes.append(enriched)
 
+                # 🔄 CHECKPOINT: Save incrementally every N contratacoes
+                if idx % checkpoint_every == 0:
+                    self._save_checkpoint(
+                        enriched_contratacoes,
+                        execution_date,
+                        checkpoint_num=idx // checkpoint_every,
+                    )
+                    checkpoints_saved += 1
+                    logger.info(
+                        f"💾 Checkpoint {checkpoints_saved}: Saved {len(enriched_contratacoes)} contratacoes "
+                        f"({idx}/{len(contratacoes)} total progress, "
+                        f"{total_itens} itens, {total_arquivos} arquivos)"
+                    )
+
                 # Log progress every 100 contratacoes
-                if idx % 100 == 0:
+                elif idx % 100 == 0:
                     logger.info(
                         f"Progress: {idx}/{len(contratacoes)} contratacoes, "
                         f"{total_itens} itens, {total_arquivos} arquivos"
@@ -361,13 +378,25 @@ class PNCPDetailsIngestionService:
                     }
                 )
 
+        # 🔄 FINAL CHECKPOINT: Save any remaining contratacoes
+        if len(enriched_contratacoes) % checkpoint_every != 0:
+            self._save_checkpoint(
+                enriched_contratacoes,
+                execution_date,
+                checkpoint_num=checkpoints_saved + 1,
+            )
+            checkpoints_saved += 1
+            logger.info(
+                f"💾 Final checkpoint: Saved remaining {len(enriched_contratacoes) % checkpoint_every} contratacoes"
+            )
+
         logger.info(
             f"✅ Processed {len(contratacoes)} contratacoes: "
             f"{total_itens} itens, {total_arquivos} arquivos "
-            f"({api_calls} API calls, {errors} errors)"
+            f"({api_calls} API calls, {errors} errors, {checkpoints_saved} checkpoints saved)"
         )
 
-        # Sanitize data for JSON serialization
+        # Sanitize data for JSON serialization (only return last batch for XCom)
         logger.debug("Sanitizing data for JSON serialization...")
         enriched_contratacoes_sanitized = sanitize_for_json(enriched_contratacoes)
 
@@ -534,6 +563,37 @@ class PNCPDetailsIngestionService:
         }
 
         return enriched, stats
+
+    def _save_checkpoint(
+        self, enriched_contratacoes: List[Dict], execution_date: datetime, checkpoint_num: int
+    ) -> None:
+        """
+        Save checkpoint to Bronze layer (append mode).
+
+        Args:
+            enriched_contratacoes: All contratacoes processed so far
+            execution_date: Date for partitioning
+            checkpoint_num: Checkpoint number (for logging)
+        """
+        try:
+            # Convert to DataFrame
+            df = convert_nested_to_dataframe(enriched_contratacoes)
+
+            # Save to Bronze in APPEND mode
+            s3_key = save_to_parquet_bronze(
+                df=df,
+                storage_client=self.storage_client,
+                execution_date=execution_date,
+                mode="append",
+            )
+
+            logger.debug(
+                f"Checkpoint {checkpoint_num} saved to {s3_key} ({len(df)} contratacoes)"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to save checkpoint {checkpoint_num}: {e}", exc_info=True)
+            # Don't raise - checkpoint failure shouldn't stop processing
 
     @staticmethod
     def build_composite_key(cnpj: str, ano: int, sequencial: int) -> str:

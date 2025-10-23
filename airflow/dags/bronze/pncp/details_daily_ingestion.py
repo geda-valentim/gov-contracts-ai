@@ -55,7 +55,14 @@ def fetch_details_data(**context) -> dict:
     2. Calls standalone service to fetch details
     3. Saves data to temp storage (NOT XCom to avoid DB bloat)
     4. Pushes only S3 reference to XCom (<1KB)
+
+    Features:
+    - Auto-resume: Automatically skips already-processed contratacoes
+    - Batch processing: Process N contratacoes per run (configurable)
+    - Incremental checkpoints: Saves every 50 contratacoes to prevent data loss
     """
+    from airflow.models import Variable
+
     # Airflow 3.x uses 'logical_date' instead of 'execution_date'
     execution_date = (
         context.get("logical_date")
@@ -67,16 +74,27 @@ def fetch_details_data(**context) -> dict:
         dag_run.run_id if dag_run else execution_date.strftime("%Y%m%d_%H%M%S")
     )
 
-    # Get test limit from DAG conf if provided
-    max_contratacoes = None
+    # Get configuration from DAG conf (manual trigger) or Airflow Variables
     if dag_run and dag_run.conf:
         max_contratacoes = dag_run.conf.get("max_contratacoes")
+        batch_size = dag_run.conf.get("batch_size")
+        checkpoint_every = dag_run.conf.get("checkpoint_every", 50)
+    else:
+        max_contratacoes = None
+        # Get from Airflow Variables (set via UI or CLI)
+        batch_size = Variable.get("pncp_details_batch_size", default_var=None)
+        if batch_size:
+            batch_size = int(batch_size)
+        checkpoint_every = int(Variable.get("pncp_details_checkpoint_every", default_var=50))
 
     # Call standalone service (no Airflow dependencies)
     service = PNCPDetailsIngestionService()
     result = service.fetch_details_for_date(
         execution_date=execution_date,
         max_contratacoes=max_contratacoes,
+        batch_size=batch_size,
+        auto_resume=True,  # Always use auto-resume in daily DAG
+        checkpoint_every=checkpoint_every,
     )
 
     # ✅ SOLUTION: Save data to temp storage instead of XCom
