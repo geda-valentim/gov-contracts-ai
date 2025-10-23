@@ -20,11 +20,11 @@ x-airflow-common-env: &airflow-common-env
   MINIO_ENDPOINT_URL: 'http://minio:9000'
 
 x-airflow-volumes: &airflow-volumes
-  - ../../../airflow/dags:/opt/airflow/dags
-  - ../../../airflow/logs:/opt/airflow/logs
-  - ../../../airflow/plugins:/opt/airflow/plugins
-  - ../../../airflow/config:/opt/airflow/config
-  - ../../../backend:/opt/airflow/backend:ro
+  - ${AIRFLOW_DAGS_PATH:-./airflow/dags}:/opt/airflow/dags
+  - ${AIRFLOW_LOGS_PATH:-./airflow/logs}:/opt/airflow/logs
+  - ${AIRFLOW_PLUGINS_PATH:-./airflow/plugins}:/opt/airflow/plugins
+  - ${AIRFLOW_CONFIG_PATH:-./airflow/config}:/opt/airflow/config
+  - ${BACKEND_PATH:-./backend}:/opt/airflow/backend:ro
 
 x-airflow-depends-on: &airflow-depends-on
   postgres:
@@ -166,7 +166,7 @@ services:
       _PIP_ADDITIONAL_REQUIREMENTS: ''
     user: "0:0"
     volumes:
-      - ../../../airflow:/sources
+      - ${AIRFLOW_DAGS_PATH:-./airflow/dags}/..:/sources
     depends_on:
       postgres:
         condition: service_healthy
