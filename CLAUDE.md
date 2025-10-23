@@ -494,6 +494,13 @@ NEXT_PUBLIC_ENV=development
 - PR descriptions: Include context, testing done, screenshots if UI
 - Squash merge to main
 
+**IMPORTANT - Git Author Configuration:**
+- **NEVER use personal names in commits**
+- Always use: `Gov Contracts AI Bot <bot@govcontracts.ai>`
+- Before committing, verify author with: `git log -1 --format="%an <%ae>"`
+- If wrong author, amend with: `git commit --amend --author="Gov Contracts AI Bot <bot@govcontracts.ai>"`
+- This is a **portfolio project** - maintain professional, anonymous commits
+
 ## Data Sources
 
 ### Government APIs
