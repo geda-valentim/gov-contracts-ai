@@ -317,6 +317,19 @@ class PNCPDetailsIngestionService:
 
         logger.info(f"Processing {len(contratacoes)} contratacoes...")
 
+        # Print startup banner for Airflow UI
+        print(f"\n{'='*70}")
+        print("🚀 STARTING DETAILS INGESTION")
+        print(f"{'='*70}")
+        print(f"📅 Date: {execution_date.date()}")
+        print(f"📦 Total contratacoes: {len(contratacoes)}")
+        print(f"🔄 Checkpoint every: {checkpoint_every}")
+        if batch_size:
+            print(f"📊 Batch size: {batch_size}")
+        if auto_resume:
+            print("♻️  Auto-resume: ENABLED")
+        print(f"{'='*70}\n")
+
         # 2. Fetch details for each contratacao with incremental checkpoints
         enriched_contratacoes = []
         total_itens = 0
@@ -345,18 +358,26 @@ class PNCPDetailsIngestionService:
                         checkpoint_num=idx // checkpoint_every,
                     )
                     checkpoints_saved += 1
-                    logger.info(
+                    checkpoint_msg = (
                         f"💾 Checkpoint {checkpoints_saved}: Saved {len(enriched_contratacoes)} contratacoes "
                         f"({idx}/{len(contratacoes)} total progress, "
                         f"{total_itens} itens, {total_arquivos} arquivos)"
                     )
+                    logger.info(checkpoint_msg)
+                    # Print for Airflow UI visibility
+                    print(f"\n{'='*70}")
+                    print(checkpoint_msg)
+                    print(f"{'='*70}\n")
 
                 # Log progress every 100 contratacoes
                 elif idx % 100 == 0:
-                    logger.info(
+                    progress_msg = (
                         f"Progress: {idx}/{len(contratacoes)} contratacoes, "
                         f"{total_itens} itens, {total_arquivos} arquivos"
                     )
+                    logger.info(progress_msg)
+                    # Print for Airflow UI visibility
+                    print(progress_msg)
 
             except Exception as e:
                 logger.error(
@@ -386,9 +407,25 @@ class PNCPDetailsIngestionService:
                 checkpoint_num=checkpoints_saved + 1,
             )
             checkpoints_saved += 1
-            logger.info(
-                f"💾 Final checkpoint: Saved remaining {len(enriched_contratacoes) % checkpoint_every} contratacoes"
-            )
+            remaining = len(enriched_contratacoes) % checkpoint_every
+            final_msg = f"💾 Final checkpoint: Saved remaining {remaining} contratacoes"
+            logger.info(final_msg)
+            # Print for Airflow UI visibility
+            print(f"\n{'='*70}")
+            print(final_msg)
+            print(f"{'='*70}\n")
+
+        # Print completion summary for Airflow UI
+        print(f"\n{'='*70}")
+        print("✅ INGESTION COMPLETE")
+        print(f"{'='*70}")
+        print(f"📦 Contratacoes processed: {len(contratacoes)}")
+        print(f"📝 Total itens: {total_itens}")
+        print(f"📄 Total arquivos: {total_arquivos}")
+        print(f"🌐 API calls: {api_calls}")
+        print(f"❌ Errors: {errors}")
+        print(f"💾 Checkpoints saved: {checkpoints_saved}")
+        print(f"{'='*70}\n")
 
         logger.info(
             f"✅ Processed {len(contratacoes)} contratacoes: "
@@ -565,7 +602,10 @@ class PNCPDetailsIngestionService:
         return enriched, stats
 
     def _save_checkpoint(
-        self, enriched_contratacoes: List[Dict], execution_date: datetime, checkpoint_num: int
+        self,
+        enriched_contratacoes: List[Dict],
+        execution_date: datetime,
+        checkpoint_num: int,
     ) -> None:
         """
         Save checkpoint to Bronze layer (append mode).
@@ -591,8 +631,13 @@ class PNCPDetailsIngestionService:
                 f"Checkpoint {checkpoint_num} saved to {s3_key} ({len(df)} contratacoes)"
             )
 
+            # Print checkpoint save confirmation for Airflow UI
+            print(f"   ✓ Saved to Bronze: {s3_key}")
+
         except Exception as e:
-            logger.error(f"Failed to save checkpoint {checkpoint_num}: {e}", exc_info=True)
+            error_msg = f"⚠️  Failed to save checkpoint {checkpoint_num}: {e}"
+            logger.error(error_msg, exc_info=True)
+            print(error_msg)
             # Don't raise - checkpoint failure shouldn't stop processing
 
     @staticmethod
