@@ -9,15 +9,30 @@ Usage:
 """
 
 import sys
+import os
 import argparse
 from datetime import datetime
 from pathlib import Path
+from dotenv import load_dotenv
 
-# Add paths
+# Load environment variables from .env
+env_path = Path(__file__).parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(env_path)
+
+# Add paths - use AIRFLOW_DAGS_PATH from .env if available
 project_root = Path(__file__).parent.parent
+airflow_dags_path = os.getenv("AIRFLOW_DAGS_PATH")
+
+# If AIRFLOW_DAGS_PATH is set, use it; otherwise fall back to project_root/airflow
+if airflow_dags_path:
+    airflow_root = Path(airflow_dags_path).parent
+else:
+    airflow_root = project_root / "airflow"
+
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "backend"))
-sys.path.insert(0, str(project_root / "airflow"))
+sys.path.insert(0, str(airflow_root))
 
 from backend.app.core.minio_client import MinIOClient
 
@@ -86,7 +101,6 @@ def test_hourly_dag(num_pages=5, num_modalidades=3):
 
     try:
         # Temporarily override NUM_PAGES for testing
-        import bronze.pncp_hourly_ingestion as dag_module
 
         # Patch the function to use fewer pages/modalidades
         result1 = fetch_last_n_pages_task(**context)

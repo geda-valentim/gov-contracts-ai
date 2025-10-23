@@ -31,7 +31,15 @@ set -e
 echo "Creating buckets..."
 
 # Create Medallion Architecture buckets
-BUCKETS=("bronze" "silver" "gold" "mlflow" "backups" "tmp")
+# Use environment variables from .env, fallback to defaults
+BUCKETS=(
+    "${BUCKET_BRONZE:-lh-bronze}"
+    "${BUCKET_SILVER:-lh-silver}"
+    "${BUCKET_GOLD:-lh-gold}"
+    "${BUCKET_MLFLOW:-mlflow}"
+    "${BUCKET_BACKUPS:-backups}"
+    "${BUCKET_TMP:-tmp}"
+)
 
 for bucket in "${BUCKETS[@]}"; do
     if mc ls local/${bucket} > /dev/null 2>&1; then
@@ -41,7 +49,7 @@ for bucket in "${BUCKETS[@]}"; do
         mc mb local/${bucket}
 
         # Enable versioning for bronze, silver, gold (data lineage)
-        if [[ "$bucket" == "bronze" ]] || [[ "$bucket" == "silver" ]] || [[ "$bucket" == "gold" ]]; then
+        if [[ "$bucket" == *"bronze"* ]] || [[ "$bucket" == *"silver"* ]] || [[ "$bucket" == *"gold"* ]]; then
             echo "Enabling versioning for ${bucket}"
             mc version enable local/${bucket}
         fi
@@ -55,7 +63,7 @@ for bucket in "${BUCKETS[@]}"; do
         # fi
 
         # Set lifecycle policy for tmp (auto-delete after 7 days)
-        if [[ "$bucket" == "tmp" ]]; then
+        if [[ "$bucket" == *"tmp"* ]]; then
             echo "Setting lifecycle policy for tmp"
             cat > /tmp/tmp-lifecycle.json <<EOF
 {
@@ -77,7 +85,8 @@ done
 
 echo "Creating folder structure in bronze bucket..."
 
-# Create bronze bucket structure
+# Create bronze bucket structure using environment variable
+BRONZE_BUCKET="${BUCKET_BRONZE:-lh-bronze}"
 BRONZE_FOLDERS=(
     "licitacoes"
     "editais_raw"
@@ -88,7 +97,7 @@ BRONZE_FOLDERS=(
 
 for folder in "${BRONZE_FOLDERS[@]}"; do
     # Create a .keep file to ensure folder exists
-    echo "placeholder" | mc pipe local/bronze/${folder}/.keep
+    echo "placeholder" | mc pipe local/${BRONZE_BUCKET}/${folder}/.keep
 done
 
 echo "MinIO buckets initialized successfully!"
@@ -98,6 +107,6 @@ mc ls local/
 
 echo ""
 echo "Versioning status:"
-for bucket in bronze silver gold; do
+for bucket in "${BUCKET_BRONZE:-lh-bronze}" "${BUCKET_SILVER:-lh-silver}" "${BUCKET_GOLD:-lh-gold}"; do
     echo "${bucket}: $(mc version info local/${bucket})"
 done

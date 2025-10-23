@@ -4,6 +4,11 @@
 
 set -e
 
+# Load environment variables from .env
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+
 # Configuration
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -62,8 +67,13 @@ log_info "Backing up MinIO data lake..."
 if docker ps --format '{{.Names}}' | grep -q "govcontracts-minio"; then
     mkdir -p "$BACKUP_PATH/minio"
 
-    # List of buckets to backup
-    BUCKETS=("lh-bronze" "lh-silver" "lh-gold" "mlflow")
+    # List of buckets to backup (from .env or defaults)
+    BUCKETS=(
+        "${BUCKET_BRONZE:-lh-bronze}"
+        "${BUCKET_SILVER:-lh-silver}"
+        "${BUCKET_GOLD:-lh-gold}"
+        "${BUCKET_MLFLOW:-mlflow}"
+    )
 
     for bucket in "${BUCKETS[@]}"; do
         log_info "  - Backing up bucket: $bucket"

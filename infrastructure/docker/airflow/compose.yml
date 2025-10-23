@@ -156,7 +156,10 @@ services:
         fi
         mkdir -p /sources/logs /sources/dags /sources/plugins
         chown -R "$${AIRFLOW_UID}:0" /sources/{logs,dags,plugins}
-        exec /entrypoint airflow version
+        /entrypoint airflow version
+        echo "🔄 Serializing DAGs..."
+        /entrypoint airflow dags reserialize
+        echo "✅ DAGs serialized!"
     environment:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: 'true'
