@@ -1,5 +1,14 @@
 # Gov Contracts AI - Data Layer Infrastructure
 
+> **⚠️ IMPORTANT**: This directory contains individual service configurations (Dockerfiles, configs).
+> To run services, use the **root `/docker-compose.yml`** file instead of this directory's compose file.
+>
+> ```bash
+> # From project root
+> make up          # Start all services
+> make up-dev      # Start with dev tools (Adminer, RedisInsight)
+> ```
+
 Docker configuration for Phase 1 Data Layer services: **MinIO**, **PostgreSQL**, and **Redis**.
 
 ## 📋 Status da Implementação
@@ -104,8 +113,8 @@ infrastructure/docker/
 │  │ S3 API       │    │              │    │              │    │
 │  │ Data Lake    │    │ Data         │    │ Cache        │    │
 │  │              │    │ Warehouse    │    │ Sessions     │    │
-│  │ Port: 9100   │    │ Port: 5433   │    │ Port: 6380   │    │
-│  │ UI:   9101   │    │              │    │              │    │
+│  │ Port: 9000   │    │ Port: 5433   │    │ Port: 6380   │    │
+│  │ UI:   9001   │    │              │    │              │    │
 │  └──────────────┘    └──────────────┘    └──────────────┘    │
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐  │
@@ -140,8 +149,8 @@ infrastructure/docker/
 - `tmp/` - Temporary processing (7-day auto-delete)
 
 **Access**:
-- S3 API: `http://localhost:9100` (mapeado de 9000)
-- Console UI: `http://localhost:9101` (mapeado de 9001)
+- S3 API: `http://localhost:9000` (mapeado de 9000)
+- Console UI: `http://localhost:9001` (mapeado de 9001)
 - Default credentials: `minioadmin` / `minioadmin`
 
 ### 2. PostgreSQL 16 (Data Warehouse)
@@ -199,8 +208,8 @@ infrastructure/docker/
 ### 2. Setup
 
 ```bash
-# Navigate to infrastructure directory
-cd infrastructure/docker
+# Navigate to project root
+cd /path/to/gov-contracts-ai
 
 # Copy environment variables
 cp .env.example .env
@@ -209,13 +218,21 @@ cp .env.example .env
 nano .env
 
 # IMPORTANT: Ensure MinIO data directory exists
-# Default: /mnt/d/minio/data (configure in .env via MINIO_DATA_DIR)
-mkdir -p /mnt/d/minio/data
+# Default: /var/storage (configure in .env via MINIO_DATA_DIR)
+mkdir -p /var/storage
 
-# Build and start services
+# Build and start services using Makefile
+make up
+
+# OR start with dev tools (Adminer + RedisInsight)
+make up-dev
+
+# OR use docker compose directly
 docker compose up -d
 
 # View logs
+make logs
+# OR
 docker compose logs -f
 
 # Check service health
@@ -227,10 +244,10 @@ docker compose ps
 **MinIO**:
 ```bash
 # Check MinIO health
-curl http://localhost:9100/minio/health/live
+curl http://localhost:9000/minio/health/live
 
 # Access MinIO Console
-# Open browser: http://localhost:9101
+# Open browser: http://localhost:9001
 # Login: minioadmin / minioadmin
 
 # Verify buckets were created
@@ -279,7 +296,7 @@ from botocore.client import Config
 # Create S3 client
 s3 = boto3.client(
     's3',
-    endpoint_url='http://localhost:9100',
+    endpoint_url='http://localhost:9000',
     aws_access_key_id='minioadmin',
     aws_secret_access_key='minioadmin',
     config=Config(signature_version='s3v4'),
@@ -308,7 +325,7 @@ import s3fs
 fs = s3fs.S3FileSystem(
     key='minioadmin',
     secret='minioadmin',
-    client_kwargs={'endpoint_url': 'http://localhost:9100'}
+    client_kwargs={'endpoint_url': 'http://localhost:9000'}
 )
 
 # Read Parquet from S3
@@ -328,7 +345,7 @@ df.to_parquet(
 df_csv = pd.read_csv('s3://bronze/precos_mercado/sinapi_2025.csv', storage_options={
     'key': 'minioadmin',
     'secret': 'minioadmin',
-    'client_kwargs': {'endpoint_url': 'http://localhost:9100'}
+    'client_kwargs': {'endpoint_url': 'http://localhost:9000'}
 })
 ```
 
@@ -512,7 +529,7 @@ docker compose exec postgres psql -U admin -d govcontracts -c \
 docker compose exec redis redis-cli info stats
 
 # MinIO metrics (Prometheus format)
-curl http://localhost:9100/minio/v2/metrics/cluster
+curl http://localhost:9000/minio/v2/metrics/cluster
 ```
 
 ## Troubleshooting
@@ -538,7 +555,7 @@ docker compose up -d postgres
 docker compose up minio-init
 
 # Manual bucket creation
-docker compose exec minio mc alias set local http://localhost:9100 minioadmin minioadmin
+docker compose exec minio mc alias set local http://localhost:9000 minioadmin minioadmin
 docker compose exec minio mc mb local/bronze
 docker compose exec minio mc version enable local/bronze
 ```

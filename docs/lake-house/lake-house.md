@@ -680,7 +680,7 @@ storage:
     base_path: "/mnt/d/data/bronze/editais_raw"
   minio:
     enabled: false
-    endpoint: "localhost:9100"
+    endpoint: "localhost:9000"
     bucket: "gov-contracts-pdfs"
 
 opensearch:
@@ -2177,7 +2177,7 @@ CREATE INDEX idx_item_tipo ON precos_referencia(item_tipo);
 ### 12.1 Estrutura de Buckets
 
 ```
-MinIO Server (localhost:9100)
+MinIO Server (localhost:9000)
 │
 ├─ bronze/                       # Raw data
 │  ├─ licitacoes/
@@ -2225,17 +2225,17 @@ services:
     image: minio/minio:latest
     container_name: minio
     ports:
-      - "9000:9100"   # S3 API
-      - "9001:9101"   # Console UI
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Console UI
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
       MINIO_VOLUMES: "/data"
     volumes:
       - /var/storage:/data      # HDD 1.81TB backend
-    command: server /data --console-address ":9101"
+    command: server /data --console-address ":9001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9100/minio/health/live"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 30s
       timeout: 20s
       retries: 3
@@ -2247,7 +2247,7 @@ services:
       - minio
     entrypoint: >
       /bin/sh -c "
-      mc alias set myminio http://minio:9100 minioadmin minioadmin;
+      mc alias set myminio http://minio:9000 minioadmin minioadmin;
       mc mb --ignore-existing myminio/bronze;
       mc mb --ignore-existing myminio/silver;
       mc mb --ignore-existing myminio/gold;
@@ -2273,7 +2273,7 @@ def get_s3_client():
     """Get MinIO S3 client"""
     return boto3.client(
         's3',
-        endpoint_url='http://localhost:9100',
+        endpoint_url='http://localhost:9000',
         aws_access_key_id='minioadmin',
         aws_secret_access_key='minioadmin',
         config=Config(signature_version='s3v4'),
@@ -2286,7 +2286,7 @@ import s3fs
 fs = s3fs.S3FileSystem(
     key='minioadmin',
     secret='minioadmin',
-    client_kwargs={'endpoint_url': 'http://localhost:9100'}
+    client_kwargs={'endpoint_url': 'http://localhost:9000'}
 )
 
 # Read Parquet from S3

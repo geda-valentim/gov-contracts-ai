@@ -2,18 +2,31 @@
 # MinIO bucket initialization script
 # Creates the Medallion Architecture buckets and configures versioning
 
-set -e
-
 echo "Waiting for MinIO to be ready..."
-until curl -sf http://minio:9100/minio/health/live > /dev/null 2>&1; do
-    echo "MinIO not ready yet, waiting..."
+echo "Connecting to MinIO at http://minio:9000 with user: ${MINIO_ROOT_USER}"
+
+# Wait for MinIO to be ready
+MAX_RETRIES=60
+RETRY_COUNT=0
+
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    if mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} 2>/dev/null; then
+        if mc admin info local > /dev/null 2>&1; then
+            echo "MinIO is ready!"
+            break
+        fi
+    fi
+    echo "MinIO not ready yet, waiting... (attempt $((RETRY_COUNT+1))/$MAX_RETRIES)"
+    RETRY_COUNT=$((RETRY_COUNT+1))
     sleep 2
 done
 
-echo "MinIO is ready. Configuring mc client..."
+if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+    echo "ERROR: MinIO failed to become ready after $MAX_RETRIES attempts"
+    exit 1
+fi
 
-# Configure MinIO client
-mc alias set local http://minio:9100 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD}
+set -e
 
 echo "Creating buckets..."
 
@@ -34,10 +47,12 @@ for bucket in "${BUCKETS[@]}"; do
         fi
 
         # Set retention policy for backups (30 days)
-        if [[ "$bucket" == "backups" ]]; then
-            echo "Setting retention policy for backups"
-            mc retention set --default GOVERNANCE 30d local/${bucket}
-        fi
+        # Note: Object Lock requires bucket to be created with --with-lock flag
+        # Skipping retention policy for now
+        # if [[ "$bucket" == "backups" ]]; then
+        #     echo "Setting retention policy for backups"
+        #     mc retention set --default GOVERNANCE 30d local/${bucket}
+        # fi
 
         # Set lifecycle policy for tmp (auto-delete after 7 days)
         if [[ "$bucket" == "tmp" ]]; then

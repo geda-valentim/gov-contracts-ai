@@ -1,0 +1,39 @@
+# MLflow Service
+# ML experiment tracking and model registry
+
+services:
+  mlflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: govcontracts-mlflow:latest
+    container_name: govcontracts-mlflow
+    env_file:
+      - ../../../.env
+    ports:
+      - "5000:5000"
+    environment:
+      BACKEND_STORE_URI: postgresql://admin:dev123@postgres:5432/mlflow
+      DEFAULT_ARTIFACT_ROOT: s3://mlflow/artifacts
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+    volumes:
+      - mlflow_data:/mlflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      govcontracts-network:
+        ipv4_address: 172.30.0.7
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri postgresql://admin:dev123@postgres:5432/mlflow
+      --default-artifact-root s3://mlflow/artifacts
+
+volumes:
+  mlflow_data:

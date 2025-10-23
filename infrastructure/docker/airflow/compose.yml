@@ -1,0 +1,174 @@
+# Airflow Services
+# Workflow orchestration platform
+
+# Common Airflow environment variables (YAML anchor)
+x-airflow-common-env: &airflow-common-env
+  AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+  AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+  AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-webserver:8080/execution/'
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://admin:dev123@postgres:5432/airflow
+  AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://admin:dev123@postgres:5432/airflow
+  AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+  AIRFLOW__CORE__FERNET_KEY: 'v1MDKWB7tbZYXC98dkDVhI2Ui53HC7E29eMvewprCOg='
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+  AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+  AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+  AIRFLOW__API__SECRET_KEY: 'e55abc044a495dd51a482c0173c3bd4b1e272a2ee76c63c1c3a3fca1259d968f'
+  AIRFLOW__WEBSERVER__SECRET_KEY: 'govcontracts-secret-key-change-in-prod'
+  AIRFLOW__API_AUTH__JWT_SECRET: 'ttmXq6glxiVmwDWxz7ulQA=='
+
+x-airflow-volumes: &airflow-volumes
+  - ../../../airflow/dags:/opt/airflow/dags
+  - ../../../airflow/logs:/opt/airflow/logs
+  - ../../../airflow/plugins:/opt/airflow/plugins
+  - ../../../airflow/config:/opt/airflow/config
+  - ../../../backend:/opt/airflow/backend:ro
+
+x-airflow-depends-on: &airflow-depends-on
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  airflow-init:
+    condition: service_completed_successfully
+
+services:
+  airflow-webserver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: govcontracts-airflow:latest
+    container_name: govcontracts-airflow-webserver
+    env_file:
+      - ../../../.env
+    command: api-server
+    ports:
+      - "8081:8080"
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: 'airflow'
+      _AIRFLOW_WWW_USER_PASSWORD: 'airflow'
+    volumes: *airflow-volumes
+    user: "50000:0"
+    depends_on: *airflow-depends-on
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/v2/monitor/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      govcontracts-network:
+        ipv4_address: 172.30.0.20
+
+  airflow-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: govcontracts-airflow:latest
+    container_name: govcontracts-airflow-scheduler
+    env_file:
+      - ../../../.env
+    command: scheduler
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    volumes: *airflow-volumes
+    user: "50000:0"
+    depends_on: *airflow-depends-on
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      govcontracts-network:
+        ipv4_address: 172.30.0.21
+
+  airflow-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: govcontracts-airflow:latest
+    container_name: govcontracts-airflow-worker
+    env_file:
+      - ../../../.env
+    command: celery worker
+    environment:
+      <<: *airflow-common-env
+      DUMB_INIT_SETSID: "0"
+    volumes: *airflow-volumes
+    user: "50000:0"
+    depends_on: *airflow-depends-on
+    healthcheck:
+      test: ["CMD-SHELL", "celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d celery@$${HOSTNAME} || celery --app airflow.executors.celery_executor.app inspect ping -d celery@$${HOSTNAME}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      govcontracts-network:
+        ipv4_address: 172.30.0.22
+
+  airflow-triggerer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: govcontracts-airflow:latest
+    container_name: govcontracts-airflow-triggerer
+    env_file:
+      - ../../../.env
+    command: triggerer
+    environment: *airflow-common-env
+    volumes: *airflow-volumes
+    user: "50000:0"
+    depends_on: *airflow-depends-on
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type TriggererJob --hostname \"$${HOSTNAME}\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      govcontracts-network:
+        ipv4_address: 172.30.0.23
+
+  airflow-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: govcontracts-airflow:latest
+    container_name: govcontracts-airflow-init
+    env_file:
+      - ../../../.env
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        if [[ -z "$${AIRFLOW_UID}" ]]; then
+          echo "AIRFLOW_UID not set, using default 50000"
+          export AIRFLOW_UID=50000
+        fi
+        mkdir -p /sources/logs /sources/dags /sources/plugins
+        chown -R "$${AIRFLOW_UID}:0" /sources/{logs,dags,plugins}
+        exec /entrypoint airflow version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: 'airflow'
+      _AIRFLOW_WWW_USER_PASSWORD: 'airflow'
+      _PIP_ADDITIONAL_REQUIREMENTS: ''
+    user: "0:0"
+    volumes:
+      - ../../../airflow:/sources
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - govcontracts-network

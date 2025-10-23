@@ -5,7 +5,7 @@ LABEL description="MinIO S3-compatible object storage for Data Lake"
 
 # Create healthcheck script
 RUN echo '#!/bin/sh' > /healthcheck.sh && \
-    echo 'curl -f http://localhost:9100/minio/health/live || exit 1' >> /healthcheck.sh && \
+    echo 'curl -f http://localhost:9000/minio/health/live || exit 1' >> /healthcheck.sh && \
     chmod +x /healthcheck.sh
 
 # Expose ports
@@ -18,4 +18,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD ["/healthcheck.sh"]
 
 # Default command (can be overridden in docker-compose)
-CMD ["server", "/data", "--console-address", ":9101"]
+CMD ["server", "/data", "--console-address", ":9001"]

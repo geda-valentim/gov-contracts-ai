@@ -1,0 +1,4 @@
+# Data directory - will be mounted from HDD in production
+# bronze/ - Raw data from APIs
+# silver/ - Cleaned and validated data
+# gold/ - ML-ready features

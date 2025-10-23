@@ -12,8 +12,8 @@
 Este documento reflete as decisões tomadas durante a implementação real do projeto:
 
 ### 🔌 Portas Customizadas
-- **API S3:** `9100` (host) → `9000` (container)
-- **Web Console:** `9101` (host) → `9001` (container)
+- **API S3:** `9000` (host) → `9000` (container)
+- **Web Console:** `9001` (host) → `9001` (container)
 - **Motivo:** Evitar conflitos com outros projetos rodando em desenvolvimento
 
 ### 🌐 Rede Docker
@@ -98,8 +98,8 @@ Este documento reflete as decisões tomadas durante a implementação real do pr
 ### Estrutura Completa
 
 ```
-MinIO Server (http://localhost:9100)  ⚠️ PORTA 9100, NÃO 9000
-Console Web (http://localhost:9101)   ⚠️ PORTA 9101, NÃO 9001
+MinIO Server (http://localhost:9000)  ⚠️ PORTA 9000, NÃO 9000
+Console Web (http://localhost:9001)   ⚠️ PORTA 9001, NÃO 9001
 │
 ├─ 📦 bronze/                    # RAW DATA (dados brutos)
 │  ├─ licitacoes/
@@ -178,8 +178,8 @@ Console Web (http://localhost:9101)   ⚠️ PORTA 9101, NÃO 9001
 ### Software
 - **Docker** 24+ instalado
 - **Docker Compose** instalado (comando: `docker compose`, não `docker-compose`)
-- **Ports livres:** 9100 (API S3), 9101 (Console Web)
-  - ⚠️ **NOTA:** Usamos portas não-padrão (9100/9101 ao invés de 9000/9001) para evitar conflitos com outros projetos
+- **Ports livres:** 9000 (API S3), 9001 (Console Web)
+  - ⚠️ **NOTA:** Usamos portas não-padrão (9000/9001 ao invés de 9000/9001) para evitar conflitos com outros projetos
 
 ### Verificar instalação:
 ```bash
@@ -204,10 +204,10 @@ services:
     container_name: govcontracts-minio
     ports:
       # IMPORTANTE: Mapeamento Host:Container
-      # 9100 (host) -> 9000 (container) = S3 API
-      # 9101 (host) -> 9001 (container) = Web Console
-      - "9100:9000"   # S3 API (porta externa 9100 para evitar conflitos)
-      - "9101:9001"   # Web Console (porta externa 9101)
+      # 9000 (host) -> 9000 (container) = S3 API
+      # 9001 (host) -> 9001 (container) = Web Console
+      - "9000:9000"   # S3 API (porta externa 9000 para evitar conflitos)
+      - "9001:9001"   # Web Console (porta externa 9001)
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin  # TROCAR EM PRODUÇÃO!
@@ -308,8 +308,8 @@ docker volume create minio_data
 # IMPORTANTE: Portas no formato HOST:CONTAINER
 docker run -d \
   --name govcontracts-minio \
-  -p 9100:9000 \
-  -p 9101:9001 \
+  -p 9000:9000 \
+  -p 9001:9001 \
   -e "MINIO_ROOT_USER=minioadmin" \
   -e "MINIO_ROOT_PASSWORD=minioadmin" \
   -v minio_data:/data \
@@ -330,7 +330,7 @@ docker inspect govcontracts-minio | grep -A 10 Health
 ### Método 1: MinIO Console (UI) - MAIS FÁCIL
 
 1. **Acessar Console:**
-   - URL: http://localhost:9101 ⚠️ **NOTA: Porta 9101, não 9001!**
+   - URL: http://localhost:9001 ⚠️ **NOTA: Porta 9001, não 9001!**
    - User: `minioadmin`
    - Password: `minioadmin`
 
@@ -363,8 +363,8 @@ sudo mv mc /usr/local/bin/
 # Baixar de https://dl.min.io/client/mc/release/windows-amd64/mc.exe
 
 # Configurar alias para o servidor local
-# IMPORTANTE: Use porta 9100 (HOST), não 9000
-mc alias set myminio http://localhost:9100 minioadmin minioadmin
+# IMPORTANTE: Use porta 9000 (HOST), não 9000
+mc alias set myminio http://localhost:9000 minioadmin minioadmin
 
 # Testar conexão
 mc admin info myminio
@@ -399,10 +399,10 @@ import boto3
 from botocore.client import Config
 
 # Cliente S3 (MinIO)
-# IMPORTANTE: Use porta 9100 (HOST), não 9000
+# IMPORTANTE: Use porta 9000 (HOST), não 9000
 s3 = boto3.client(
     's3',
-    endpoint_url='http://localhost:9100',
+    endpoint_url='http://localhost:9000',
     aws_access_key_id='minioadmin',
     aws_secret_access_key='minioadmin',
     config=Config(signature_version='s3v4'),
@@ -539,8 +539,8 @@ pip install boto3 s3fs pyarrow pandas
 **Opção A: Variáveis de Ambiente (.env)**
 ```bash
 # .env
-# IMPORTANTE: Porta 9100 (HOST), não 9000
-MINIO_ENDPOINT=http://localhost:9100
+# IMPORTANTE: Porta 9000 (HOST), não 9000
+MINIO_ENDPOINT=http://localhost:9000
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin
 MINIO_REGION=us-east-1
@@ -552,7 +552,7 @@ MINIO_REGION=us-east-1
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    MINIO_ENDPOINT: str = "http://localhost:9100"
+    MINIO_ENDPOINT: str = "http://localhost:9000"
     MINIO_ACCESS_KEY: str = "minioadmin"
     MINIO_SECRET_KEY: str = "minioadmin"
     MINIO_REGION: str = "us-east-1"
@@ -672,7 +672,7 @@ def upload_to_s3(**context):
     """Task para upload de dados no MinIO"""
     # NOTA: Se Airflow roda em container na mesma rede Docker,
     # use 'http://minio:9000' (nome do serviço + porta interna)
-    # Se roda no host, use 'http://localhost:9100'
+    # Se roda no host, use 'http://localhost:9000'
     s3 = boto3.client(
         's3',
         endpoint_url='http://minio:9000',  # URL interna Docker
@@ -709,11 +709,11 @@ with DAG(
 
 ```bash
 # 1. MinIO está rodando? (API S3)
-curl http://localhost:9100/minio/health/live
+curl http://localhost:9000/minio/health/live
 # Resposta esperada: 200 OK
 
 # 2. Console acessível?
-curl -I http://localhost:9101
+curl -I http://localhost:9001
 # Resposta esperada: 200 OK
 
 # 3. Verificar container rodando
@@ -721,7 +721,7 @@ docker ps | grep minio
 # Deve mostrar govcontracts-minio com status healthy
 
 # 4. Buckets criados? (CLI)
-mc alias set myminio http://localhost:9100 minioadmin minioadmin
+mc alias set myminio http://localhost:9000 minioadmin minioadmin
 mc ls myminio
 # Deve listar: bronze, silver, gold, mlflow, backups, tmp
 
@@ -738,7 +738,7 @@ mc ls myminio/bronze/test/
 # 7. Python funciona?
 python -c "
 import boto3
-s3 = boto3.client('s3', endpoint_url='http://localhost:9100',
+s3 = boto3.client('s3', endpoint_url='http://localhost:9000',
                   aws_access_key_id='minioadmin',
                   aws_secret_access_key='minioadmin')
 buckets = s3.list_buckets()
@@ -765,7 +765,7 @@ def test_minio_setup():
     print("1️⃣ Testando conexão...")
     s3 = boto3.client(
         's3',
-        endpoint_url='http://localhost:9100',
+        endpoint_url='http://localhost:9000',
         aws_access_key_id='minioadmin',
         aws_secret_access_key='minioadmin',
         config=Config(signature_version='s3v4')
@@ -791,7 +791,7 @@ def test_minio_setup():
     fs = s3fs.S3FileSystem(
         key='minioadmin',
         secret='minioadmin',
-        client_kwargs={'endpoint_url': 'http://localhost:9100'}
+        client_kwargs={'endpoint_url': 'http://localhost:9000'}
     )
 
     test_data.to_parquet('s3://tmp/test.parquet', filesystem=fs)
@@ -857,14 +857,14 @@ docker-compose restart minio
 
 ---
 
-### Problema 2: Console não carrega (http://localhost:9101)
+### Problema 2: Console não carrega (http://localhost:9001)
 
 **Solução:**
 ```bash
 # Verificar se porta está em uso
-sudo netstat -tulpn | grep 9101
+sudo netstat -tulpn | grep 9001
 # Ou no Windows/WSL:
-lsof -i :9101
+lsof -i :9001
 
 # Se estiver, mudar porta no docker-compose.yml
 ports:
@@ -888,9 +888,9 @@ botocore.exceptions.EndpointConnectionError: Could not connect to the endpoint U
 
 **Soluções:**
 ```python
-# 1. Verificar endpoint correto (porta 9100, não 9000!)
+# 1. Verificar endpoint correto (porta 9000, não 9000!)
 import requests
-response = requests.get('http://localhost:9100/minio/health/live')
+response = requests.get('http://localhost:9000/minio/health/live')
 print(response.status_code)  # Deve ser 200
 
 # 2. Se falhar, MinIO não está rodando:
@@ -899,7 +899,7 @@ docker compose logs minio  # Ver erros
 
 # 3. Verificar se está usando porta correta no código:
 # ✅ CORRETO:
-s3 = boto3.client('s3', endpoint_url='http://localhost:9100', ...)
+s3 = boto3.client('s3', endpoint_url='http://localhost:9000', ...)
 
 # ❌ ERRADO (porta padrão):
 s3 = boto3.client('s3', endpoint_url='http://localhost:9000', ...)
@@ -911,8 +911,8 @@ s3 = boto3.client('s3', endpoint_url='http://localhost:9000', ...)
 
 **Solução:**
 ```bash
-# Via CLI (porta 9100!)
-mc alias set myminio http://localhost:9100 minioadmin minioadmin
+# Via CLI (porta 9000!)
+mc alias set myminio http://localhost:9000 minioadmin minioadmin
 mc ls myminio
 
 # Se vazio, criar manualmente:
@@ -995,21 +995,21 @@ docker volume prune
 
 **Sintoma:**
 ```
-Error starting userland proxy: listen tcp4 0.0.0.0:9100: bind: address already in use
+Error starting userland proxy: listen tcp4 0.0.0.0:9000: bind: address already in use
 ```
 
 **Solução:**
 ```bash
 # 1. Identificar o processo usando a porta
-lsof -i :9100
+lsof -i :9000
 # Ou:
-sudo netstat -tulpn | grep 9100
+sudo netstat -tulpn | grep 9000
 
 # 2. Opção A: Parar o processo conflitante
 kill -9 <PID>
 
 # 3. Opção B: Mudar porta no docker-compose.yml
-# Trocar 9100 por outra porta disponível (ex: 9200)
+# Trocar 9000 por outra porta disponível (ex: 9200)
 ports:
   - "9200:9000"  # Nova porta externa
   - "9201:9001"
@@ -1083,7 +1083,7 @@ mc mirror /backup/bronze myminio/bronze
 mc admin prometheus metrics myminio
 
 # Health check
-curl http://localhost:9100/minio/health/live
+curl http://localhost:9000/minio/health/live
 
 # Listar versões de objeto
 mc ls --versions myminio/bronze/editais_raw/123456.pdf
@@ -1102,16 +1102,16 @@ docker compose ps --format "table {{.Service}}\t{{.Ports}}"
 Antes de prosseguir para a próxima etapa, certifique-se:
 
 - [ ] MinIO rodando (Docker) com status `healthy`
-- [ ] Console acessível em http://localhost:9101 ⚠️ **Porta 9101!**
-- [ ] API S3 acessível em http://localhost:9100
+- [ ] Console acessível em http://localhost:9001 ⚠️ **Porta 9001!**
+- [ ] API S3 acessível em http://localhost:9000
 - [ ] 6 buckets criados: bronze, silver, gold, mlflow, backups, tmp
 - [ ] Versioning habilitado em: bronze, silver, gold, mlflow
-- [ ] Python conecta via boto3 usando porta 9100
+- [ ] Python conecta via boto3 usando porta 9000
 - [ ] Pandas lê/escreve Parquet via s3fs
 - [ ] Upload de arquivo teste funciona
-- [ ] mc (MinIO Client) configurado com porta 9100
+- [ ] mc (MinIO Client) configurado com porta 9000
 - [ ] Teste completo passa (test_minio_setup.py)
-- [ ] Variáveis de ambiente apontam para porta 9100
+- [ ] Variáveis de ambiente apontam para porta 9000
 - [ ] Rede Docker `govcontracts-network` criada com subnet 172.30.0.0/16
 - [ ] Container `minio-init` executou e criou buckets automaticamente
 

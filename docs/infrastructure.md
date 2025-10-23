@@ -27,9 +27,9 @@ Stack completa de Data Science & ML para detecção de fraudes em licitações b
 │   Data Lake      │  Data Warehouse  │    Search Engine        │
 │   (MinIO S3)     │  (PostgreSQL 15) │   (OpenSearch 3)        │
 │                  │                  │                         │
-│  lh-bronze  🥉   │  • Structured    │  • Full-text search     │
-│  lh-silver  🥈   │  • OLAP queries  │  • Semantic search      │
-│  lh-gold    🥇   │  • pg_vector     │  • NLP analysis         │
+│  bronze  🥉   │  • Structured    │  • Full-text search     │
+│  silver  🥈   │  • OLAP queries  │  • Semantic search      │
+│  gold    🥇   │  • pg_vector     │  • NLP analysis         │
 │  mlflow          │  • Analytics     │  • Aggregations         │
 │  backups         │                  │                         │
 │  tmp             │                  │                         │
@@ -75,28 +75,28 @@ Stack completa de Data Science & ML para detecção de fraudes em licitações b
 
 #### MinIO (S3-compatible)
 - **Container:** `govcontracts-minio`
-- **Porta API:** `9100:9000` (externa: 9100)
-- **Porta Console:** `9101:9001` (externa: 9101)
+- **Porta API:** `9000:9000` (externa: 9000)
+- **Porta Console:** `9001:9001` (externa: 9001)
 - **User/Pass:** `minioadmin/minioadmin`
 - **IP:** `172.30.0.10`
 - **Volume:** `minio_data`
 
 **Buckets:**
 ```
-lh-bronze/          # 🥉 Raw data (imutável, versionado)
+bronze/          # 🥉 Raw data (imutável, versionado)
 ├─ licitacoes/      #   Particionado: year=YYYY/month=MM/day=DD/
 ├─ editais_raw/     #   PDFs originais
 ├─ editais_text/    #   Texto extraído (JSON)
 ├─ precos_mercado/  #   Preços de referência
 └─ cnpj/            #   Dados da Receita Federal
 
-lh-silver/          # 🥈 Clean data (validado, normalizado)
+silver/          # 🥈 Clean data (validado, normalizado)
 ├─ licitacoes_clean/
 ├─ editais_parsed/
 ├─ editais_analysis/
 └─ precos_normalized/
 
-lh-gold/            # 🥇 ML-ready (features engineered)
+gold/            # 🥇 ML-ready (features engineered)
 ├─ features_ml/
 ├─ embeddings/
 └─ agregados/
@@ -106,7 +106,7 @@ backups/            # Backups do sistema
 tmp/                # Arquivos temporários (auto-delete 7 dias)
 ```
 
-**Console UI:** http://localhost:9101
+**Console UI:** http://localhost:9001
 
 #### OpenSearch 3
 - **Container:** `govcontracts-opensearch`
@@ -253,7 +253,7 @@ Aguardar até todos os containers estarem **healthy**.
 
 - **Airflow UI:** http://localhost:8081 (airflow/airflow)
 - **MLflow UI:** http://localhost:5000
-- **MinIO Console:** http://localhost:9101 (minioadmin/minioadmin)
+- **MinIO Console:** http://localhost:9001 (minioadmin/minioadmin)
 - **OpenSearch Dashboards:** http://localhost:5602
 
 ### 4. Verificar logs
@@ -323,7 +323,7 @@ Crie um arquivo `.env` no diretório raiz:
 
 ```bash
 # MinIO
-MINIO_ENDPOINT=http://localhost:9100
+MINIO_ENDPOINT=http://localhost:9000
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin
 
@@ -358,7 +358,7 @@ AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://admin:dev123@localhost
 import boto3
 s3 = boto3.client(
     's3',
-    endpoint_url='http://localhost:9100',
+    endpoint_url='http://localhost:9000',
     aws_access_key_id='minioadmin',
     aws_secret_access_key='minioadmin'
 )
@@ -489,9 +489,9 @@ docker compose logs -f airflow-scheduler
 ## 📚 Próximos Passos
 
 1. **Criar primeiro DAG do Airflow**
-   - Ingestão diária de licitações (PNCP API → lh-bronze)
-   - Transformação ETL (lh-bronze → lh-silver)
-   - Feature engineering (lh-silver → lh-gold)
+   - Ingestão diária de licitações (PNCP API → bronze)
+   - Transformação ETL (bronze → silver)
+   - Feature engineering (silver → gold)
 
 2. **Configurar MinIO connections no Airflow**
    ```bash
@@ -506,7 +506,7 @@ docker compose logs -f airflow-scheduler
 3. **Indexar dados no OpenSearch**
    - Criar index para editais
    - Configurar mappings para busca semântica
-   - Popular com dados de lh-silver
+   - Popular com dados de silver
 
 4. **Treinar primeiro modelo ML**
    - Criar DAG de training (XGBoost)

@@ -1,0 +1,30 @@
+# Redis 7 Service
+# High-performance cache and session storage
+
+services:
+  redis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: govcontracts-redis
+    env_file:
+      - ../../../.env
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      govcontracts-network:
+        ipv4_address: 172.30.0.6
+
+volumes:
+  redis_data:

@@ -1,0 +1,48 @@
+# PostgreSQL 16 Service
+# Data warehouse with pgvector support
+
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: govcontracts-postgres
+    restart: unless-stopped
+    env_file:
+      - ../../../.env  # Centralized environment variables
+    environment:
+      # Override .env values if needed (these take precedence)
+      POSTGRES_DB: ${POSTGRES_DB:-govcontracts}
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev123}
+      POSTGRES_INITDB_ARGS: ${POSTGRES_INITDB_ARGS}
+      PGDATA: ${PGDATA}
+      TZ: ${TZ:-America/Sao_Paulo}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./init-scripts:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d govcontracts"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
+    shm_size: 256mb
+    networks:
+      govcontracts-network:
+        ipv4_address: 172.30.0.5
+
+volumes:
+  postgres_data:
+
+networks:
+  govcontracts-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
