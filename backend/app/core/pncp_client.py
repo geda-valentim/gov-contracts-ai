@@ -272,9 +272,7 @@ class PNCPClient:
 
         # Handle empty responses
         if not response.content or response.content.strip() == b"":
-            logger.warning(
-                f"No items found for contratacao {cnpj}/{ano}/{sequencial}"
-            )
+            logger.warning(f"No items found for contratacao {cnpj}/{ano}/{sequencial}")
             return []
 
         try:
@@ -413,9 +411,7 @@ class PNCPClient:
         for arquivo in arquivos:
             arquivo["_parsed_domains"] = parse_arquivo_response_codes(arquivo)
 
-        logger.info(
-            f"Fetched {len(arquivos)} arquivos for {cnpj}/{ano}/{sequencial}"
-        )
+        logger.info(f"Fetched {len(arquivos)} arquivos for {cnpj}/{ano}/{sequencial}")
 
         return arquivos
 

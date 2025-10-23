@@ -45,6 +45,7 @@ def sanitize_for_json(obj: Any) -> Any:
     # Handle pandas NA/NaT (scalar values only)
     try:
         import pandas as pd
+
         # Only check scalars, not arrays
         if not isinstance(obj, (dict, list, tuple)):
             try:
@@ -87,10 +88,17 @@ def convert_nested_to_dataframe(contratacoes: List[Dict]) -> pd.DataFrame:
     """
     if not contratacoes:
         # Return empty DataFrame with expected schema
-        return pd.DataFrame(columns=[
-            'cnpj', 'anoCompra', 'sequencialCompra', 'numeroControlePNCP',
-            'itens', 'arquivos', '_metadata'
-        ])
+        return pd.DataFrame(
+            columns=[
+                "cnpj",
+                "anoCompra",
+                "sequencialCompra",
+                "numeroControlePNCP",
+                "itens",
+                "arquivos",
+                "_metadata",
+            ]
+        )
 
     # Sanitize data first to handle numpy types
     sanitized = [sanitize_for_json(c) for c in contratacoes]
@@ -98,16 +106,15 @@ def convert_nested_to_dataframe(contratacoes: List[Dict]) -> pd.DataFrame:
     # Create DataFrame - pandas will handle nested lists naturally
     df = pd.DataFrame(sanitized)
 
-    logger.info(f"Converted {len(df)} contratacoes to DataFrame ({df.memory_usage(deep=True).sum() / 1024:.1f} KB)")
+    logger.info(
+        f"Converted {len(df)} contratacoes to DataFrame ({df.memory_usage(deep=True).sum() / 1024:.1f} KB)"
+    )
 
     return df
 
 
 def save_to_parquet_bronze(
-    df: pd.DataFrame,
-    storage_client,
-    execution_date: datetime,
-    mode: str = "overwrite"
+    df: pd.DataFrame, storage_client, execution_date: datetime, mode: str = "overwrite"
 ) -> str:
     """
     Save details DataFrame to Bronze in Parquet format.
@@ -133,10 +140,9 @@ def save_to_parquet_bronze(
         # Read existing file if it exists
         try:
             # Access underlying client
-            client = getattr(storage_client, '_client', storage_client)
+            client = getattr(storage_client, "_client", storage_client)
             existing_df = client.read_parquet_from_s3(
-                bucket_name=storage_client.BUCKET_BRONZE,
-                object_name=s3_key
+                bucket_name=storage_client.BUCKET_BRONZE, object_name=s3_key
             )
             logger.info(f"Read existing Parquet: {len(existing_df)} rows")
 
@@ -153,12 +159,10 @@ def save_to_parquet_bronze(
     buffer.seek(0)
 
     # Access underlying client (MinIOClient or S3Client)
-    client = getattr(storage_client, '_client', storage_client)
+    client = getattr(storage_client, "_client", storage_client)
 
     client.upload_fileobj(
-        file_obj=buffer,
-        bucket_name=storage_client.BUCKET_BRONZE,
-        object_name=s3_key
+        file_obj=buffer, bucket_name=storage_client.BUCKET_BRONZE, object_name=s3_key
     )
 
     logger.info(
@@ -280,7 +284,9 @@ class PNCPDetailsIngestionService:
             contratacoes = unprocessed_contratacoes
 
             if not contratacoes:
-                logger.info("✅ All contratacoes already processed (auto-resume complete)")
+                logger.info(
+                    "✅ All contratacoes already processed (auto-resume complete)"
+                )
                 return {
                     "data": [],
                     "metadata": {
@@ -370,7 +376,9 @@ class PNCPDetailsIngestionService:
         if auto_resume:
             remaining_contratacoes = total_available - len(contratacoes)
             if remaining_contratacoes > 0:
-                logger.info(f"📋 Remaining: {remaining_contratacoes} contratacoes to process in future runs")
+                logger.info(
+                    f"📋 Remaining: {remaining_contratacoes} contratacoes to process in future runs"
+                )
 
         return {
             "data": enriched_contratacoes_sanitized,
@@ -382,7 +390,9 @@ class PNCPDetailsIngestionService:
                 "api_calls": api_calls,
                 "errors": errors,
                 "ingestion_timestamp": datetime.now().isoformat(),
-                "remaining_contratacoes": remaining_contratacoes if auto_resume else None,
+                "remaining_contratacoes": remaining_contratacoes
+                if auto_resume
+                else None,
             },
         }
 
@@ -447,9 +457,7 @@ class PNCPDetailsIngestionService:
             )
             return []
 
-    def _fetch_single_contratacao_details(
-        self, contratacao: Dict
-    ) -> Tuple[Dict, Dict]:
+    def _fetch_single_contratacao_details(self, contratacao: Dict) -> Tuple[Dict, Dict]:
         """
         Fetch details (itens + arquivos) for a single contratacao.
 

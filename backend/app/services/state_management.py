@@ -481,7 +481,7 @@ class StateManager:
             key = key_extractor_fn(contratacao)
 
             if not key:
-                logger.warning(f"Could not extract key from contratacao, skipping")
+                logger.warning("Could not extract key from contratacao, skipping")
                 continue
 
             if key not in processed_keys:

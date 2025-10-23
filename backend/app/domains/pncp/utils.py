@@ -13,7 +13,6 @@ from .instrumento_convocatorio import InstrumentoConvocatorio
 from .modalidade_contratacao import ModalidadeContratacao
 from .modo_disputa import ModoDisputa
 from .situacao_item_contratacao import SituacaoItemContratacao
-from .situacao_resultado_item import SituacaoResultadoItem
 from .tipo_documento import TipoDocumento
 
 
