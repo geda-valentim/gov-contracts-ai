@@ -38,9 +38,11 @@ Example standalone usage:
 """
 
 from .ingestion import PNCPIngestionService
+from .state_management import StateManager
 from .transformation import DataTransformationService
 
 __all__ = [
     "PNCPIngestionService",
     "DataTransformationService",
+    "StateManager",
 ]

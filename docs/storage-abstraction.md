@@ -42,7 +42,7 @@ class StorageClient(ABC):
 
 1. **MinIOStorageClient** - For local development
    - Wraps existing `MinIOClient`
-   - Uses `localhost:9000` by default
+   - Uses `minio:9000` by default
    - Credentials: `minioadmin/minioadmin`
 
 2. **S3StorageClient** - For production
@@ -59,7 +59,7 @@ class StorageClient(ABC):
 ```bash
 # .env or .env.local
 STORAGE_TYPE=minio
-MINIO_ENDPOINT_URL=http://localhost:9000
+MINIO_ENDPOINT_URL=http://minio:9000
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin
 ```
@@ -124,7 +124,7 @@ from backend.app.core.storage_client import MinIOStorageClient, S3StorageClient
 
 # MinIO
 minio = MinIOStorageClient(
-    endpoint_url="http://localhost:9000",
+    endpoint_url="http://minio:9000",
     access_key="minioadmin",
     secret_key="minioadmin"
 )
@@ -341,7 +341,7 @@ Enable S3 metrics in AWS Console:
 
 MinIO exposes Prometheus metrics at `/minio/v2/metrics/cluster`:
 ```bash
-curl http://localhost:9000/minio/v2/metrics/cluster
+curl http://minio:9000/minio/v2/metrics/cluster
 ```
 
 ## Troubleshooting
@@ -370,7 +370,7 @@ docker compose ps minio
 docker compose restart minio
 
 # Check endpoint URL
-echo $MINIO_ENDPOINT_URL  # Should be http://localhost:9000
+echo $MINIO_ENDPOINT_URL  # Should be http://minio:9000
 ```
 
 ### Switching between MinIO and S3

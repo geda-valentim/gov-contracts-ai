@@ -98,7 +98,7 @@ docker compose exec postgres psql -U admin -d govcontracts -c "\l"
 docker compose exec postgres psql -U admin -d airflow -c "\l"
 
 # MinIO
-curl http://localhost:9000/minio/health/live
+curl http://minio:9000/minio/health/live
 
 # Redis
 docker compose exec redis redis-cli ping
@@ -150,7 +150,7 @@ docker compose up -d
 docker logs minio --tail=50
 
 # Testar manualmente
-curl http://localhost:9000/minio/health/live
+curl http://minio:9000/minio/health/live
 ```
 
 **Solução temporária:**

@@ -1,12 +1,19 @@
 """
-Bronze Layer: PNCP Hourly Ingestion DAG (Thin Wrapper).
+Bronze Layer: PNCP Hourly Ingestion DAG with Incremental State Management.
 
 This DAG is a thin Airflow wrapper around standalone business logic services.
 The actual logic lives in backend/app/services/ and can be executed independently.
 
+INCREMENTAL INGESTION:
+- State file per day tracks processed IDs (numeroControlePNCP)
+- Each execution filters out already-processed records
+- Only NEW records are saved to Bronze layer
+- Avoids duplicates across multiple hourly runs
+
 Schedule: Every hour
-Data: Last 20 pages from PNCP API (~10,000 records)
+Data: Last 10 pages from PNCP API (~5,000 records)
 Partitioning: year=YYYY/month=MM/day=DD/hour=HH
+State: pncp/_state/year=YYYY/month=MM/day=DD/state_YYYYMMDD.json
 """
 
 import sys
@@ -29,6 +36,7 @@ from backend.app.domains.pncp import ModalidadeContratacao
 from backend.app.services import (
     DataTransformationService,
     PNCPIngestionService,
+    StateManager,
 )
 
 # DAG default arguments
@@ -72,14 +80,19 @@ def fetch_pncp_data(**context) -> dict:
 
 def transform_data(**context) -> dict:
     """
-    Airflow task wrapper: Transform and validate data.
+    Airflow task wrapper: Transform and validate data with incremental state filtering.
 
     This is a thin wrapper that:
     1. Pulls data from XCom
-    2. Calls standalone service
-    3. Pushes results to XCom
+    2. Loads state to filter duplicates
+    3. Filters only NEW records
+    4. Transforms and validates
+    5. Updates state with new IDs
+    6. Pushes results to XCom
     """
     task_instance = context["task_instance"]
+    # Airflow 3.x uses 'logical_date' instead of 'execution_date'
+    execution_date = context.get("logical_date") or context.get("data_interval_start")
 
     # Get data from previous task
     raw_data = task_instance.xcom_pull(task_ids="fetch_pncp_data", key="fetched_data")
@@ -87,39 +100,84 @@ def transform_data(**context) -> dict:
     if not raw_data:
         return {"transformed": False, "reason": "no_data"}
 
+    # ===== INCREMENTAL STATE FILTERING =====
+    # Initialize state manager
+    state_manager = StateManager()
+
+    # Filter only NEW records (not previously processed)
+    new_records, filter_stats = state_manager.filter_new_records(
+        source="pncp",
+        date=execution_date,
+        records=raw_data,
+        id_field="numeroControlePNCP",
+    )
+
+    print(
+        f"📊 State Filtering: {filter_stats['total_input']} input → "
+        f"{filter_stats['new_records']} new ({filter_stats['already_processed']} duplicates filtered)"
+    )
+
+    # If no new records, return early (don't create empty files)
+    if not new_records:
+        print("⚠️  No new records to process (all duplicates)")
+        return {
+            "transformed": False,
+            "reason": "no_new_records",
+            "filter_stats": filter_stats,
+        }
+
+    # ===== TRANSFORM AND VALIDATE =====
     # Call standalone service
     service = DataTransformationService()
 
     # Validate
-    validation_report = service.validate_records(raw_data)
+    validation_report = service.validate_records(new_records)
 
-    # Transform to DataFrame
-    df = service.to_dataframe(raw_data, deduplicate=True)
+    # Transform to DataFrame (no deduplication needed - already done by state)
+    df = service.to_dataframe(new_records, deduplicate=False)
 
     # Add metadata
     metadata = task_instance.xcom_pull(task_ids="fetch_pncp_data", key="metadata")
     df = service.add_metadata_columns(df, metadata)
 
-    # Store DataFrame in context for next task (instead of XCom which has size limits)
-    # XCom is limited to ~1MB, but we have 3000+ records
-    # Solution: Pass DataFrame directly via return value and let Airflow handle it
+    # ===== UPDATE STATE =====
+    # Extract IDs from new records
+    new_ids = [r.get("numeroControlePNCP") for r in new_records if r.get("numeroControlePNCP")]
+
+    # Update state with new processed IDs
+    state_manager.update_state(
+        source="pncp",
+        date=execution_date,
+        new_ids=new_ids,
+        execution_metadata={
+            "new_records": len(new_records),
+            "duplicates_filtered": filter_stats["already_processed"],
+            "filter_rate": filter_stats["filter_rate"],
+        },
+    )
+
+    print(f"✅ State updated: {len(new_ids)} new IDs added")
+
+    # Store DataFrame in context for next task
     task_instance.xcom_push(key="dataframe", value=df)  # Pandas DataFrame
     task_instance.xcom_push(key="validation_report", value=validation_report)
+    task_instance.xcom_push(key="filter_stats", value=filter_stats)
 
     return {
         "transformed": True,
         "record_count": len(df),
         "validation": validation_report,
+        "filter_stats": filter_stats,
     }
 
 
 def upload_to_bronze(**context) -> dict:
     """
-    Airflow task wrapper: Upload data to Bronze layer.
+    Airflow task wrapper: Upload data to Bronze layer as Parquet.
 
     This is a thin wrapper that:
-    1. Pulls data from XCom
-    2. Calls standalone service
+    1. Pulls DataFrame from XCom
+    2. Uploads directly as Parquet (no JSON conversion needed)
     3. Returns upload result
     """
     task_instance = context["task_instance"]
@@ -132,25 +190,24 @@ def upload_to_bronze(**context) -> dict:
     if df is None or len(df) == 0:
         return {"uploaded": False, "reason": "no_data"}
 
-    # Convert DataFrame to JSON-safe list of dicts
-    # Use df.to_json() + json.loads() to handle numpy types properly
-    import json
-
-    data = json.loads(df.to_json(orient="records", date_format="iso"))
-
-    # Upload to Bronze using MinIO client
+    # Upload DataFrame directly to Bronze as Parquet (default format)
+    # No need to convert to JSON - Parquet handles pandas types natively
     storage = get_storage_client()
     s3_key = storage.upload_to_bronze(
-        data=data,
+        data=df,  # Pass DataFrame directly
         source="pncp",
         date=execution_date,
+        format="parquet",  # Explicit format (default)
     )
+
+    print(f"📦 Uploaded {len(df)} records as Parquet: {s3_key}")
 
     return {
         "uploaded": True,
         "s3_key": s3_key,
         "bucket": storage.BUCKET_BRONZE,
-        "record_count": len(data),
+        "record_count": len(df),
+        "format": "parquet",
     }
 
 
@@ -163,13 +220,17 @@ def validate_ingestion(**context) -> dict:
     2. Validates completion
     3. Returns validation status
 
-    Note: Succeeds with no_data=True when API returns no results (expected for future dates)
+    Note: Succeeds with no_data=True when:
+    - API returns no results (expected for future dates)
+    - All records were duplicates (state filtering)
     """
     task_instance = context["task_instance"]
 
     # Get results from previous tasks
+    transform_result = task_instance.xcom_pull(task_ids="transform_data")
     upload_result = task_instance.xcom_pull(task_ids="upload_to_bronze")
     validation_report = task_instance.xcom_pull(task_ids="transform_data", key="validation_report")
+    filter_stats = task_instance.xcom_pull(task_ids="transform_data", key="filter_stats")
 
     # Handle case where no data was available from API (expected for future dates)
     if upload_result and upload_result.get("reason") == "no_data":
@@ -181,6 +242,24 @@ def validate_ingestion(**context) -> dict:
             "no_data": True,
             "reason": "no_data_from_api",
             "record_count": 0,
+        }
+
+    # Handle case where all records were duplicates (state filtering)
+    if transform_result and transform_result.get("reason") == "no_new_records":
+        print(
+            "⚠️  No new records to ingest - all records were already processed (duplicates filtered by state)"
+        )
+        if filter_stats:
+            print(
+                f"   State filtering: {filter_stats['total_input']} input → "
+                f"{filter_stats['already_processed']} duplicates filtered"
+            )
+        return {
+            "validated": True,
+            "no_data": True,
+            "reason": "all_duplicates",
+            "record_count": 0,
+            "filter_stats": filter_stats,
         }
 
     # Validate that upload actually succeeded
@@ -204,13 +283,21 @@ def validate_ingestion(**context) -> dict:
     if not all_passed:
         raise ValueError(f"Validation failed: {checks}")
 
-    print(f"✅ Validation passed: {record_count} records ingested")
+    # Log filtering statistics
+    if filter_stats:
+        print(
+            f"📊 Incremental ingestion stats: {filter_stats['total_input']} fetched → "
+            f"{filter_stats['new_records']} new ({filter_stats['already_processed']} duplicates filtered)"
+        )
+
+    print(f"✅ Validation passed: {record_count} NEW records ingested")
 
     return {
         "validated": True,
         "no_data": False,
         "checks": checks,
         "record_count": record_count,
+        "filter_stats": filter_stats,
     }
 
 
@@ -218,12 +305,12 @@ def validate_ingestion(**context) -> dict:
 with DAG(
     dag_id="bronze_pncp_hourly_ingestion",
     default_args=default_args,
-    description="Hourly ingestion of PNCP data to Bronze layer (thin wrapper)",
+    description="Hourly ingestion of PNCP data to Bronze layer with incremental state management",
     schedule="0 * * * *",  # Every hour
     start_date=datetime(2025, 10, 1, tzinfo=UTC),
     catchup=False,
     max_active_runs=1,
-    tags=["bronze", "pncp", "ingestion", "hourly"],
+    tags=["bronze", "pncp", "ingestion", "hourly", "incremental"],
 ) as dag:
     # Task 1: Fetch data (thin wrapper around PNCPIngestionService)
     task_fetch = PythonOperator(

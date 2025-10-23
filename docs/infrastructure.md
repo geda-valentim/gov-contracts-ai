@@ -323,7 +323,7 @@ Crie um arquivo `.env` no diretório raiz:
 
 ```bash
 # MinIO
-MINIO_ENDPOINT=http://localhost:9000
+MINIO_ENDPOINT=http://minio:9000
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin
 
@@ -358,7 +358,7 @@ AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://admin:dev123@localhost
 import boto3
 s3 = boto3.client(
     's3',
-    endpoint_url='http://localhost:9000',
+    endpoint_url='http://minio:9000',
     aws_access_key_id='minioadmin',
     aws_secret_access_key='minioadmin'
 )

@@ -16,6 +16,8 @@ x-airflow-common-env: &airflow-common-env
   AIRFLOW__API__SECRET_KEY: 'e55abc044a495dd51a482c0173c3bd4b1e272a2ee76c63c1c3a3fca1259d968f'
   AIRFLOW__WEBSERVER__SECRET_KEY: 'govcontracts-secret-key-change-in-prod'
   AIRFLOW__API_AUTH__JWT_SECRET: 'ttmXq6glxiVmwDWxz7ulQA=='
+  # MinIO endpoint for Docker containers (override localhost from .env)
+  MINIO_ENDPOINT_URL: 'http://minio:9000'
 
 x-airflow-volumes: &airflow-volumes
   - ../../../airflow/dags:/opt/airflow/dags

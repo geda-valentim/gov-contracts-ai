@@ -5,7 +5,7 @@ LABEL description="MinIO S3-compatible object storage for Data Lake"
 
 # Create healthcheck script
 RUN echo '#!/bin/sh' > /healthcheck.sh && \
-    echo 'curl -f http://localhost:9000/minio/health/live || exit 1' >> /healthcheck.sh && \
+    echo 'curl -f http://minio:9000/minio/health/live || exit 1' >> /healthcheck.sh && \
     chmod +x /healthcheck.sh
 
 # Expose ports

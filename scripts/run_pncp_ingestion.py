@@ -5,8 +5,14 @@ Standalone PNCP Ingestion Script - No Airflow Required.
 This script runs the complete ingestion pipeline using standalone services.
 Can be executed directly without any Airflow dependencies.
 
+Features:
+- ✅ State Management: Incremental deduplication (zero duplicates)
+- ✅ Parquet Format: 60-90% storage reduction
+- ✅ Framework-agnostic: Reusable services
+- ✅ Complete audit trail: All executions tracked
+
 Usage:
-    # Hourly ingestion (last 20 pages)
+    # Hourly ingestion (last 20 pages, with state management)
     python scripts/run_pncp_ingestion.py --mode hourly
 
     # Daily ingestion (complete day)
@@ -22,11 +28,22 @@ Examples:
     # Quick test with 3 modalidades and 5 pages
     python scripts/run_pncp_ingestion.py --mode custom --date 20241022 --pages 5 --modalidades 3
 
-    # Full hourly ingestion
+    # Full hourly ingestion (with incremental state)
     python scripts/run_pncp_ingestion.py --mode hourly
 
     # Backfill historical data
     python scripts/run_pncp_ingestion.py --mode backfill --start-date 20241001 --end-date 20241031
+
+    # Test state management (run twice to see deduplication)
+    python scripts/run_pncp_ingestion.py --mode hourly --modalidades 1 --pages 2
+    python scripts/run_pncp_ingestion.py --mode hourly --modalidades 1 --pages 2  # No new records
+
+Pipeline Steps:
+1. FETCH DATA: Call PNCP API
+2. STATE FILTERING: Filter duplicates using StateManager
+3. TRANSFORM: Validate and convert to DataFrame
+4. UPLOAD: Save as Parquet to Bronze layer
+5. VALIDATE: Confirm success
 """
 
 import argparse
@@ -35,12 +52,29 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Load environment variables from .env file BEFORE importing backend modules
+# Load from root .env file (project root)
+# Use override=True to ensure .env values take precedence over existing env vars
+dotenv_path = Path(__file__).parent.parent / ".env"
+if dotenv_path.exists():
+    load_dotenv(dotenv_path, override=True)
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    logger.info(f"Loaded environment from {dotenv_path}")
+else:
+    logging.basicConfig(level=logging.WARNING)
+    logger = logging.getLogger(__name__)
+    logger.warning(f".env file not found at {dotenv_path}")
 
 from backend.app.services import (
     PNCPIngestionService,
     DataTransformationService,
+    StateManager,
 )
 from backend.app.core.storage_client import get_storage_client
 from backend.app.domains.pncp import ModalidadeContratacao
@@ -146,15 +180,56 @@ def run_ingestion_pipeline(
         logger.warning("No data fetched, stopping pipeline")
         return {"success": False, "reason": "no_data"}
 
-    # STEP 2: TRANSFORM AND VALIDATE
+    # STEP 2: STATE FILTERING (for hourly mode)
     logger.info("\n" + "=" * 80)
-    logger.info("STEP 2: TRANSFORMING AND VALIDATING DATA")
+    logger.info("STEP 2: STATE FILTERING (INCREMENTAL DEDUPLICATION)")
+    logger.info("=" * 80)
+
+    state_manager = StateManager()
+
+    # Determine the logical date for state management
+    if mode == "hourly":
+        execution_date = datetime.strptime(date, "%Y%m%d") if date else datetime.now()
+    elif mode == "daily":
+        execution_date = datetime.strptime(date, "%Y%m%d") if date else datetime.now()
+    elif mode == "custom":
+        execution_date = datetime.strptime(date, "%Y%m%d") if date else datetime.now()
+    else:  # backfill
+        # For backfill, use start_date
+        execution_date = (
+            datetime.strptime(start_date, "%Y%m%d") if start_date else datetime.now()
+        )
+
+    # Filter only NEW records (not previously processed)
+    new_records, filter_stats = state_manager.filter_new_records(
+        source="pncp",
+        date=execution_date,
+        records=raw_data,
+        id_field="numeroControlePNCP",
+    )
+
+    logger.info(
+        f"📊 State Filtering: {filter_stats['total_input']} input → "
+        f"{filter_stats['new_records']} new ({filter_stats['already_processed']} duplicates filtered)"
+    )
+
+    if not new_records:
+        logger.warning("⚠️  No new records to process (all duplicates)")
+        return {
+            "success": True,
+            "reason": "no_new_records",
+            "filter_stats": filter_stats,
+        }
+
+    # STEP 3: TRANSFORM AND VALIDATE
+    logger.info("\n" + "=" * 80)
+    logger.info("STEP 3: TRANSFORMING AND VALIDATING DATA")
     logger.info("=" * 80)
 
     transformation_service = DataTransformationService()
 
-    # Validate
-    validation_report = transformation_service.validate_records(raw_data)
+    # Validate only NEW records
+    validation_report = transformation_service.validate_records(new_records)
     logger.info(
         f"Validation: {validation_report['valid_records']}/{validation_report['total_records']} valid"
     )
@@ -163,60 +238,65 @@ def run_ingestion_pipeline(
             f"Found {len(validation_report['validation_errors'])} validation errors"
         )
 
-    # Transform to DataFrame
-    df = transformation_service.to_dataframe(raw_data, deduplicate=True)
+    # Transform to DataFrame (no deduplication needed - already done by state)
+    df = transformation_service.to_dataframe(new_records, deduplicate=False)
     logger.info(f"DataFrame created: {df.shape}")
 
     # Add metadata
     df = transformation_service.add_metadata_columns(df, metadata)
 
-    logger.info(f"✅ Transformed {len(df)} records")
+    logger.info(f"✅ Transformed {len(df)} NEW records")
 
-    # STEP 3: UPLOAD TO BRONZE
+    # Update state with new processed IDs
+    new_ids = [
+        r.get("numeroControlePNCP") for r in new_records if r.get("numeroControlePNCP")
+    ]
+    state_manager.update_state(
+        source="pncp",
+        date=execution_date,
+        new_ids=new_ids,
+        execution_metadata={
+            "new_records": len(new_records),
+            "duplicates_filtered": filter_stats["already_processed"],
+            "filter_rate": filter_stats["filter_rate"],
+        },
+    )
+    logger.info(f"✅ State updated: {len(new_ids)} new IDs added")
+
+    # STEP 4: UPLOAD TO BRONZE (PARQUET)
     logger.info("\n" + "=" * 80)
-    logger.info("STEP 3: UPLOADING TO BRONZE LAYER")
+    logger.info("STEP 4: UPLOADING TO BRONZE LAYER (PARQUET)")
     logger.info("=" * 80)
 
     storage = get_storage_client()
 
-    # Convert DataFrame back to dict for upload
-    data_to_upload = df.to_dict(orient="records")
-
-    # Use current time for unique filenames, but preserve the logical date for partitioning
-    # Parse the logical date but use now() for timestamp to avoid overwrites
-    if date:
-        logical_date = datetime.strptime(date, "%Y%m%d")
-        # Replace time component with current time for uniqueness
-        upload_date = logical_date.replace(
-            hour=datetime.now().hour,
-            minute=datetime.now().minute,
-            second=datetime.now().second,
-            microsecond=datetime.now().microsecond,
-        )
-    else:
-        upload_date = datetime.now()
-
+    # Upload DataFrame directly as Parquet (no need to convert to dict)
     s3_key = storage.upload_to_bronze(
-        data=data_to_upload,
+        data=df,  # DataFrame directly
         source="pncp",
-        date=upload_date,
+        date=execution_date,  # Use execution_date for consistent partitioning
+        format="parquet",  # Explicit Parquet format
     )
 
     upload_result = {
         "uploaded": True,
         "s3_key": s3_key,
         "bucket": storage.BUCKET_BRONZE,
-        "record_count": len(data_to_upload),
+        "record_count": len(df),
+        "format": "parquet",
     }
 
     logger.info(
-        f"✅ Uploaded to: s3://{upload_result['bucket']}/{upload_result['s3_key']}"
+        f"📦 Uploaded to: s3://{upload_result['bucket']}/{upload_result['s3_key']}"
     )
-    logger.info(f"Records uploaded: {upload_result['record_count']}")
+    logger.info(f"Records uploaded: {upload_result['record_count']} (Parquet format)")
+    logger.info(
+        f"Filter stats: {filter_stats['new_records']} new, {filter_stats['already_processed']} duplicates filtered"
+    )
 
-    # STEP 4: VALIDATE INGESTION
+    # STEP 5: VALIDATE INGESTION
     logger.info("\n" + "=" * 80)
-    logger.info("STEP 4: VALIDATING INGESTION")
+    logger.info("STEP 5: VALIDATING INGESTION")
     logger.info("=" * 80)
 
     is_valid = (
@@ -232,8 +312,11 @@ def run_ingestion_pipeline(
     logger.info("\n" + "=" * 80)
     logger.info("PIPELINE COMPLETED SUCCESSFULLY")
     logger.info("=" * 80)
-    logger.info(f"Total records fetched: {metadata['record_count']}")
+    logger.info(f"Total records fetched from API: {metadata['record_count']}")
+    logger.info(f"New records (after state filtering): {filter_stats['new_records']}")
+    logger.info(f"Duplicates filtered: {filter_stats['already_processed']}")
     logger.info(f"Total records uploaded: {upload_result['record_count']}")
+    logger.info(f"Format: {upload_result['format'].upper()}")
     logger.info(
         f"S3 location: s3://{upload_result['bucket']}/{upload_result['s3_key']}"
     )
@@ -243,6 +326,7 @@ def run_ingestion_pipeline(
     return {
         "success": True,
         "metadata": metadata,
+        "filter_stats": filter_stats,
         "validation": validation_report,
         "upload": upload_result,
         "is_valid": is_valid,

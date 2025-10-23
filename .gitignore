@@ -45,3 +45,6 @@ airflow/config/passwords.json
 
 # Screenshots/Debug
 .playwright-mcp/
+
+# SSH keys
+github_serverdev*

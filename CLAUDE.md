@@ -71,6 +71,11 @@ alembic revision --autogenerate -m "description"
 
 # Seed data
 python scripts/seed_data.py
+
+# Generate Bronze layer report
+python scripts/report_pncp_bronze.py                # Last 30 days
+python scripts/report_pncp_bronze.py --detailed     # With daily breakdown
+python scripts/report_pncp_bronze.py --start-date 2025-10-01 --end-date 2025-10-31
 ```
 
 ### ML Development
@@ -168,7 +173,7 @@ make setup   # First-time setup
 - Redis: `localhost:6381` (Note: 6379 may be in use by other services)
 - MLflow UI: `http://localhost:5000`
 - MinIO Console: `http://localhost:9001` (credentials: minioadmin/minioadmin)
-- MinIO API: `http://localhost:9000`
+- MinIO API: `http://minio:9000`
 
 **Terraform:**
 ```bash

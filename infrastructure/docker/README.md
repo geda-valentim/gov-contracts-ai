@@ -149,7 +149,7 @@ infrastructure/docker/
 - `tmp/` - Temporary processing (7-day auto-delete)
 
 **Access**:
-- S3 API: `http://localhost:9000` (mapeado de 9000)
+- S3 API: `http://minio:9000` (mapeado de 9000)
 - Console UI: `http://localhost:9001` (mapeado de 9001)
 - Default credentials: `minioadmin` / `minioadmin`
 
@@ -244,7 +244,7 @@ docker compose ps
 **MinIO**:
 ```bash
 # Check MinIO health
-curl http://localhost:9000/minio/health/live
+curl http://minio:9000/minio/health/live
 
 # Access MinIO Console
 # Open browser: http://localhost:9001
@@ -296,7 +296,7 @@ from botocore.client import Config
 # Create S3 client
 s3 = boto3.client(
     's3',
-    endpoint_url='http://localhost:9000',
+    endpoint_url='http://minio:9000',
     aws_access_key_id='minioadmin',
     aws_secret_access_key='minioadmin',
     config=Config(signature_version='s3v4'),
@@ -325,7 +325,7 @@ import s3fs
 fs = s3fs.S3FileSystem(
     key='minioadmin',
     secret='minioadmin',
-    client_kwargs={'endpoint_url': 'http://localhost:9000'}
+    client_kwargs={'endpoint_url': 'http://minio:9000'}
 )
 
 # Read Parquet from S3
@@ -345,7 +345,7 @@ df.to_parquet(
 df_csv = pd.read_csv('s3://bronze/precos_mercado/sinapi_2025.csv', storage_options={
     'key': 'minioadmin',
     'secret': 'minioadmin',
-    'client_kwargs': {'endpoint_url': 'http://localhost:9000'}
+    'client_kwargs': {'endpoint_url': 'http://minio:9000'}
 })
 ```
 
@@ -529,7 +529,7 @@ docker compose exec postgres psql -U admin -d govcontracts -c \
 docker compose exec redis redis-cli info stats
 
 # MinIO metrics (Prometheus format)
-curl http://localhost:9000/minio/v2/metrics/cluster
+curl http://minio:9000/minio/v2/metrics/cluster
 ```
 
 ## Troubleshooting
@@ -555,7 +555,7 @@ docker compose up -d postgres
 docker compose up minio-init
 
 # Manual bucket creation
-docker compose exec minio mc alias set local http://localhost:9000 minioadmin minioadmin
+docker compose exec minio mc alias set local http://minio:9000 minioadmin minioadmin
 docker compose exec minio mc mb local/bronze
 docker compose exec minio mc version enable local/bronze
 ```

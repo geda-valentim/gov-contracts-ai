@@ -19,6 +19,8 @@ sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "backend"))
 sys.path.insert(0, str(project_root / "airflow"))
 
+from backend.app.core.minio_client import MinIOClient
+
 
 # Mock Airflow context
 class MockContext:
@@ -85,10 +87,6 @@ def test_hourly_dag(num_pages=5, num_modalidades=3):
     try:
         # Temporarily override NUM_PAGES for testing
         import bronze.pncp_hourly_ingestion as dag_module
-
-        original_num_pages = (
-            dag_module.NUM_PAGES if hasattr(dag_module, "NUM_PAGES") else 20
-        )
 
         # Patch the function to use fewer pages/modalidades
         result1 = fetch_last_n_pages_task(**context)
@@ -265,7 +263,7 @@ def test_minio_client():
 
     try:
         client = MinIOClient(
-            endpoint_url="http://localhost:9000",
+            endpoint_url="http://minio:9000",
             access_key="minioadmin",
             secret_key="minioadmin",
         )

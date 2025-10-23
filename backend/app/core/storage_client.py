@@ -27,29 +27,33 @@ class StorageClient(ABC):
     Implementations:
     - MinIOStorageClient: For local development with MinIO
     - S3StorageClient: For production with AWS S3
+
+    Bucket names are read from environment variables to allow flexible configuration.
     """
 
-    # Bucket names (can be overridden by implementations)
-    BUCKET_BRONZE = "lh-bronze"
-    BUCKET_SILVER = "lh-silver"
-    BUCKET_GOLD = "lh-gold"
+    # Bucket names - read from environment variables with fallback defaults
+    BUCKET_BRONZE = os.getenv("BUCKET_BRONZE", "lh-bronze")
+    BUCKET_SILVER = os.getenv("BUCKET_SILVER", "lh-silver")
+    BUCKET_GOLD = os.getenv("BUCKET_GOLD", "lh-gold")
 
     @abstractmethod
     def upload_to_bronze(
         self,
-        data: Union[Dict, List[Dict]],
+        data: Union[Dict, List[Dict], Any],
         source: str,
         date: Optional[datetime] = None,
         filename: Optional[str] = None,
+        format: str = "parquet",
     ) -> str:
         """
-        Upload raw data to Bronze layer.
+        Upload raw data to Bronze layer as Parquet (default) or JSON.
 
         Args:
-            data: Raw data (dict or list of dicts)
+            data: Raw data (dict, list of dicts, or DataFrame)
             source: Data source name (e.g., 'pncp')
             date: Ingestion date (defaults to now)
             filename: Custom filename (auto-generated if None)
+            format: Output format ('parquet' or 'json', default: 'parquet')
 
         Returns:
             S3 object key
@@ -120,6 +124,11 @@ class StorageClient(ABC):
         """Ensure all required buckets exist."""
         pass
 
+    @abstractmethod
+    def write_json_to_s3(self, bucket: str, key: str, data) -> str:
+        """Write JSON data to storage."""
+        pass
+
 
 class MinIOStorageClient(StorageClient):
     """
@@ -146,13 +155,15 @@ class MinIOStorageClient(StorageClient):
 
         self._client = MinIOClient(
             endpoint_url=endpoint_url
-            or os.getenv("MINIO_ENDPOINT_URL", "http://localhost:9000"),
+            or os.getenv("MINIO_ENDPOINT_URL", "http://minio:9000"),
             access_key=access_key or os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
             secret_key=secret_key or os.getenv("MINIO_SECRET_KEY", "minioadmin"),
         )
 
-    def upload_to_bronze(self, data, source, date=None, filename=None) -> str:
-        return self._client.upload_to_bronze(data, source, date, filename)
+    def upload_to_bronze(
+        self, data, source, date=None, filename=None, format="parquet"
+    ) -> str:
+        return self._client.upload_to_bronze(data, source, date, filename, format)
 
     def upload_to_silver(self, df, table, date=None, partition_cols=None) -> str:
         return self._client.upload_to_silver(df, table, date, partition_cols)
@@ -171,6 +182,9 @@ class MinIOStorageClient(StorageClient):
 
     def ensure_buckets_exist(self):
         return self._client.ensure_buckets_exist()
+
+    def write_json_to_s3(self, bucket, key, data):
+        return self._client.write_json_to_s3(bucket, key, data)
 
 
 class S3StorageClient(StorageClient):
@@ -205,33 +219,60 @@ class S3StorageClient(StorageClient):
             aws_secret_access_key=secret_key or os.getenv("AWS_SECRET_ACCESS_KEY"),
         )
 
-    def upload_to_bronze(self, data, source, date=None, filename=None) -> str:
-        """Upload to S3 Bronze layer."""
-        import json
+    def upload_to_bronze(
+        self, data, source, date=None, filename=None, format="parquet"
+    ) -> str:
+        """Upload to S3 Bronze layer as Parquet (default) or JSON."""
+        import io
 
         if date is None:
             date = datetime.now()
 
+        # Convert to DataFrame if needed
+        if isinstance(data, pd.DataFrame):
+            df = data
+        elif isinstance(data, list):
+            df = pd.DataFrame(data)
+        elif isinstance(data, dict):
+            df = pd.DataFrame([data])
+        else:
+            raise ValueError(f"Unsupported data type: {type(data)}")
+
         # Generate S3 key with Hive partitioning
         if filename is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{source}_{timestamp}.json"
+            extension = "parquet" if format == "parquet" else "json"
+            filename = f"{source}_{timestamp}.{extension}"
 
         s3_key = (
             f"{source}/year={date.year}/month={date.month:02d}/"
             f"day={date.day:02d}/{filename}"
         )
 
-        # Convert data to JSON bytes
-        json_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        # Upload based on format
+        if format == "parquet":
+            # Convert to Parquet bytes
+            buffer = io.BytesIO()
+            df.to_parquet(buffer, engine="pyarrow", compression="snappy", index=False)
+            buffer.seek(0)
 
-        # Upload to S3
-        self.s3_client.put_object(
-            Bucket=self.BUCKET_BRONZE,
-            Key=s3_key,
-            Body=json_bytes,
-            ContentType="application/json",
-        )
+            self.s3_client.put_object(
+                Bucket=self.BUCKET_BRONZE,
+                Key=s3_key,
+                Body=buffer.getvalue(),
+                ContentType="application/x-parquet",
+            )
+        else:
+            # Convert to JSON bytes (legacy)
+            json_data = df.to_json(orient="records", date_format="iso")
+            json_bytes = json_data.encode("utf-8")
+
+            self.s3_client.put_object(
+                Bucket=self.BUCKET_BRONZE,
+                Key=s3_key,
+                Body=json_bytes,
+                ContentType="application/json",
+            )
 
         return s3_key
 
@@ -329,7 +370,7 @@ class S3StorageClient(StorageClient):
         for bucket in [self.BUCKET_BRONZE, self.BUCKET_SILVER, self.BUCKET_GOLD]:
             try:
                 self.s3_client.head_bucket(Bucket=bucket)
-            except:
+            except Exception:
                 # Create bucket if it doesn't exist
                 self.s3_client.create_bucket(
                     Bucket=bucket,
@@ -337,6 +378,18 @@ class S3StorageClient(StorageClient):
                     if self.region != "us-east-1"
                     else {},
                 )
+
+    def write_json_to_s3(self, bucket, key, data):
+        """Write JSON data to S3."""
+        import json
+
+        json_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+
+        self.s3_client.put_object(
+            Bucket=bucket, Key=key, Body=json_bytes, ContentType="application/json"
+        )
+
+        return key
 
 
 def get_storage_client(

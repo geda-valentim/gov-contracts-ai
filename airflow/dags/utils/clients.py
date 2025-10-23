@@ -36,7 +36,7 @@ def get_minio_client() -> MinIOClient:
 
     if _minio_client is None:
         _minio_client = MinIOClient(
-            endpoint_url=os.getenv("MINIO_ENDPOINT", "http://minio:9000"),
+            endpoint_url=os.getenv("MINIO_ENDPOINT_URL", "http://minio:9000"),
             access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
             secret_key=os.getenv("MINIO_SECRET_KEY", "minioadmin"),
         )

@@ -680,7 +680,7 @@ storage:
     base_path: "/mnt/d/data/bronze/editais_raw"
   minio:
     enabled: false
-    endpoint: "localhost:9000"
+    endpoint: "minio:9000"
     bucket: "gov-contracts-pdfs"
 
 opensearch:
@@ -2177,7 +2177,7 @@ CREATE INDEX idx_item_tipo ON precos_referencia(item_tipo);
 ### 12.1 Estrutura de Buckets
 
 ```
-MinIO Server (localhost:9000)
+MinIO Server (minio:9000)
 │
 ├─ bronze/                       # Raw data
 │  ├─ licitacoes/
@@ -2235,7 +2235,7 @@ services:
       - /var/storage:/data      # HDD 1.81TB backend
     command: server /data --console-address ":9001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "curl", "-f", "http://minio:9000/minio/health/live"]
       interval: 30s
       timeout: 20s
       retries: 3
@@ -2273,7 +2273,7 @@ def get_s3_client():
     """Get MinIO S3 client"""
     return boto3.client(
         's3',
-        endpoint_url='http://localhost:9000',
+        endpoint_url='http://minio:9000',
         aws_access_key_id='minioadmin',
         aws_secret_access_key='minioadmin',
         config=Config(signature_version='s3v4'),
@@ -2286,7 +2286,7 @@ import s3fs
 fs = s3fs.S3FileSystem(
     key='minioadmin',
     secret='minioadmin',
-    client_kwargs={'endpoint_url': 'http://localhost:9000'}
+    client_kwargs={'endpoint_url': 'http://minio:9000'}
 )
 
 # Read Parquet from S3

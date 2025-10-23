@@ -98,7 +98,7 @@ Este documento reflete as decisões tomadas durante a implementação real do pr
 ### Estrutura Completa
 
 ```
-MinIO Server (http://localhost:9000)  ⚠️ PORTA 9000, NÃO 9000
+MinIO Server (http://minio:9000)  ⚠️ PORTA 9000, NÃO 9000
 Console Web (http://localhost:9001)   ⚠️ PORTA 9001, NÃO 9001
 │
 ├─ 📦 bronze/                    # RAW DATA (dados brutos)
@@ -216,7 +216,7 @@ services:
     command: server /data --console-address ":9001"
     healthcheck:
       # IMPORTANTE: healthcheck usa porta INTERNA (9000), não externa
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "curl", "-f", "http://minio:9000/minio/health/live"]
       interval: 30s
       timeout: 20s
       retries: 3
@@ -364,7 +364,7 @@ sudo mv mc /usr/local/bin/
 
 # Configurar alias para o servidor local
 # IMPORTANTE: Use porta 9000 (HOST), não 9000
-mc alias set myminio http://localhost:9000 minioadmin minioadmin
+mc alias set myminio http://minio:9000 minioadmin minioadmin
 
 # Testar conexão
 mc admin info myminio
@@ -402,7 +402,7 @@ from botocore.client import Config
 # IMPORTANTE: Use porta 9000 (HOST), não 9000
 s3 = boto3.client(
     's3',
-    endpoint_url='http://localhost:9000',
+    endpoint_url='http://minio:9000',
     aws_access_key_id='minioadmin',
     aws_secret_access_key='minioadmin',
     config=Config(signature_version='s3v4'),
@@ -540,7 +540,7 @@ pip install boto3 s3fs pyarrow pandas
 ```bash
 # .env
 # IMPORTANTE: Porta 9000 (HOST), não 9000
-MINIO_ENDPOINT=http://localhost:9000
+MINIO_ENDPOINT=http://minio:9000
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin
 MINIO_REGION=us-east-1
@@ -552,7 +552,7 @@ MINIO_REGION=us-east-1
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    MINIO_ENDPOINT: str = "http://localhost:9000"
+    MINIO_ENDPOINT: str = "http://minio:9000"
     MINIO_ACCESS_KEY: str = "minioadmin"
     MINIO_SECRET_KEY: str = "minioadmin"
     MINIO_REGION: str = "us-east-1"
@@ -672,7 +672,7 @@ def upload_to_s3(**context):
     """Task para upload de dados no MinIO"""
     # NOTA: Se Airflow roda em container na mesma rede Docker,
     # use 'http://minio:9000' (nome do serviço + porta interna)
-    # Se roda no host, use 'http://localhost:9000'
+    # Se roda no host, use 'http://minio:9000'
     s3 = boto3.client(
         's3',
         endpoint_url='http://minio:9000',  # URL interna Docker
@@ -709,7 +709,7 @@ with DAG(
 
 ```bash
 # 1. MinIO está rodando? (API S3)
-curl http://localhost:9000/minio/health/live
+curl http://minio:9000/minio/health/live
 # Resposta esperada: 200 OK
 
 # 2. Console acessível?
@@ -721,7 +721,7 @@ docker ps | grep minio
 # Deve mostrar govcontracts-minio com status healthy
 
 # 4. Buckets criados? (CLI)
-mc alias set myminio http://localhost:9000 minioadmin minioadmin
+mc alias set myminio http://minio:9000 minioadmin minioadmin
 mc ls myminio
 # Deve listar: bronze, silver, gold, mlflow, backups, tmp
 
@@ -738,7 +738,7 @@ mc ls myminio/bronze/test/
 # 7. Python funciona?
 python -c "
 import boto3
-s3 = boto3.client('s3', endpoint_url='http://localhost:9000',
+s3 = boto3.client('s3', endpoint_url='http://minio:9000',
                   aws_access_key_id='minioadmin',
                   aws_secret_access_key='minioadmin')
 buckets = s3.list_buckets()
@@ -765,7 +765,7 @@ def test_minio_setup():
     print("1️⃣ Testando conexão...")
     s3 = boto3.client(
         's3',
-        endpoint_url='http://localhost:9000',
+        endpoint_url='http://minio:9000',
         aws_access_key_id='minioadmin',
         aws_secret_access_key='minioadmin',
         config=Config(signature_version='s3v4')
@@ -791,7 +791,7 @@ def test_minio_setup():
     fs = s3fs.S3FileSystem(
         key='minioadmin',
         secret='minioadmin',
-        client_kwargs={'endpoint_url': 'http://localhost:9000'}
+        client_kwargs={'endpoint_url': 'http://minio:9000'}
     )
 
     test_data.to_parquet('s3://tmp/test.parquet', filesystem=fs)
@@ -890,7 +890,7 @@ botocore.exceptions.EndpointConnectionError: Could not connect to the endpoint U
 ```python
 # 1. Verificar endpoint correto (porta 9000, não 9000!)
 import requests
-response = requests.get('http://localhost:9000/minio/health/live')
+response = requests.get('http://minio:9000/minio/health/live')
 print(response.status_code)  # Deve ser 200
 
 # 2. Se falhar, MinIO não está rodando:
@@ -899,10 +899,10 @@ docker compose logs minio  # Ver erros
 
 # 3. Verificar se está usando porta correta no código:
 # ✅ CORRETO:
-s3 = boto3.client('s3', endpoint_url='http://localhost:9000', ...)
+s3 = boto3.client('s3', endpoint_url='http://minio:9000', ...)
 
 # ❌ ERRADO (porta padrão):
-s3 = boto3.client('s3', endpoint_url='http://localhost:9000', ...)
+s3 = boto3.client('s3', endpoint_url='http://minio:9000', ...)
 ```
 
 ---
@@ -912,7 +912,7 @@ s3 = boto3.client('s3', endpoint_url='http://localhost:9000', ...)
 **Solução:**
 ```bash
 # Via CLI (porta 9000!)
-mc alias set myminio http://localhost:9000 minioadmin minioadmin
+mc alias set myminio http://minio:9000 minioadmin minioadmin
 mc ls myminio
 
 # Se vazio, criar manualmente:
@@ -1083,7 +1083,7 @@ mc mirror /backup/bronze myminio/bronze
 mc admin prometheus metrics myminio
 
 # Health check
-curl http://localhost:9000/minio/health/live
+curl http://minio:9000/minio/health/live
 
 # Listar versões de objeto
 mc ls --versions myminio/bronze/editais_raw/123456.pdf
@@ -1103,7 +1103,7 @@ Antes de prosseguir para a próxima etapa, certifique-se:
 
 - [ ] MinIO rodando (Docker) com status `healthy`
 - [ ] Console acessível em http://localhost:9001 ⚠️ **Porta 9001!**
-- [ ] API S3 acessível em http://localhost:9000
+- [ ] API S3 acessível em http://minio:9000
 - [ ] 6 buckets criados: bronze, silver, gold, mlflow, backups, tmp
 - [ ] Versioning habilitado em: bronze, silver, gold, mlflow
 - [ ] Python conecta via boto3 usando porta 9000

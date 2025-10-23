@@ -10,6 +10,7 @@ Provides S3-compatible storage operations for the Data Lake architecture:
 import io
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Dict, List, Optional, Union
@@ -31,19 +32,21 @@ class MinIOClient:
     - Bronze: Raw data ingestion (JSON, CSV)
     - Silver: Cleaned and validated data (Parquet)
     - Gold: Business-ready aggregated data (Parquet)
+
+    Bucket names are read from environment variables to allow flexible configuration.
     """
 
-    # Data Lake buckets
-    BUCKET_BRONZE = "bronze"
-    BUCKET_SILVER = "silver"
-    BUCKET_GOLD = "gold"
-    BUCKET_MLFLOW = "mlflow"
-    BUCKET_BACKUPS = "backups"
-    BUCKET_TMP = "tmp"
+    # Data Lake buckets - read from environment variables with fallback defaults
+    BUCKET_BRONZE = os.getenv("BUCKET_BRONZE", "lh-bronze")
+    BUCKET_SILVER = os.getenv("BUCKET_SILVER", "lh-silver")
+    BUCKET_GOLD = os.getenv("BUCKET_GOLD", "lh-gold")
+    BUCKET_MLFLOW = os.getenv("BUCKET_MLFLOW", "mlflow")
+    BUCKET_BACKUPS = os.getenv("BUCKET_BACKUPS", "backups")
+    BUCKET_TMP = os.getenv("BUCKET_TMP", "tmp")
 
     def __init__(
         self,
-        endpoint_url: str = "http://localhost:9000",
+        endpoint_url: str = "http://minio:9000",
         access_key: str = "minioadmin",
         secret_key: str = "minioadmin",
         region: str = "us-east-1",
@@ -83,6 +86,10 @@ class MinIOClient:
         )
 
         logger.info(f"MinIO client initialized: {endpoint_url}")
+        logger.debug(
+            f"Using buckets: Bronze={self.BUCKET_BRONZE}, "
+            f"Silver={self.BUCKET_SILVER}, Gold={self.BUCKET_GOLD}"
+        )
 
     # ==========================================
     # Bucket Operations
@@ -305,30 +312,40 @@ class MinIOClient:
 
     def upload_to_bronze(
         self,
-        data: Union[Dict, List[Dict]],
+        data: Union[Dict, List[Dict], pd.DataFrame],
         source: str,
         date: Optional[datetime] = None,
         filename: Optional[str] = None,
+        format: str = "parquet",
     ) -> str:
         """
-        Upload raw data to Bronze layer.
+        Upload raw data to Bronze layer as Parquet (default) or JSON.
 
         Args:
-            data: Raw data (dict or list of dicts)
+            data: Raw data (dict, list of dicts, or DataFrame)
             source: Data source name (e.g., 'pncp', 'comprasnet')
             date: Ingestion date (defaults to now)
             filename: Custom filename (auto-generated if None)
+            format: Output format ('parquet' or 'json', default: 'parquet')
 
         Returns:
             S3 object key
 
         Example:
+            >>> # Upload as Parquet (recommended)
             >>> client.upload_to_bronze(
             ...     data=[{"id": 1, "name": "Item 1"}],
             ...     source="pncp",
             ...     date=datetime(2024, 10, 22)
             ... )
-            'pncp/year=2024/month=10/day=22/pncp_20241022_123456.json'
+            'pncp/year=2024/month=10/day=22/pncp_20241022_123456.parquet'
+
+            >>> # Upload as JSON (legacy)
+            >>> client.upload_to_bronze(
+            ...     data=[{"id": 1, "name": "Item 1"}],
+            ...     source="pncp",
+            ...     format="json"
+            ... )
         """
         if date is None:
             date = datetime.now()
@@ -338,24 +355,63 @@ class MinIOClient:
             f"{source}/year={date.year}/month={date.month:02d}/day={date.day:02d}"
         )
 
+        # Convert to DataFrame if needed
+        if isinstance(data, pd.DataFrame):
+            df = data
+        elif isinstance(data, list):
+            df = pd.DataFrame(data)
+        elif isinstance(data, dict):
+            df = pd.DataFrame([data])
+        else:
+            raise ValueError(f"Unsupported data type: {type(data)}")
+
+        record_count = len(df)
+
+        # Generate filename based on format
         if filename is None:
             timestamp = date.strftime("%Y%m%d_%H%M%S")
-            filename = f"{source}_{timestamp}.json"
+            extension = "parquet" if format == "parquet" else "json"
+            filename = f"{source}_{timestamp}.{extension}"
 
         object_name = f"{partition}/{filename}"
-
-        # Convert to JSON
-        json_data = json.dumps(data, ensure_ascii=False, indent=2)
-        file_obj = io.BytesIO(json_data.encode("utf-8"))
 
         # Metadata
         metadata = {
             "source": source,
             "ingestion_date": date.isoformat(),
-            "record_count": str(len(data) if isinstance(data, list) else 1),
+            "record_count": str(record_count),
+            "format": format,
         }
 
-        return self.upload_fileobj(file_obj, self.BUCKET_BRONZE, object_name, metadata)
+        # Upload based on format
+        if format == "parquet":
+            # Convert to Parquet
+            parquet_buffer = io.BytesIO()
+            df.to_parquet(
+                parquet_buffer,
+                engine="pyarrow",
+                compression="snappy",
+                index=False,
+            )
+            parquet_buffer.seek(0)
+
+            logger.info(
+                f"Uploading {record_count} records to Bronze as Parquet: {object_name}"
+            )
+            return self.upload_fileobj(
+                parquet_buffer, self.BUCKET_BRONZE, object_name, metadata
+            )
+        else:
+            # Convert to JSON (legacy)
+            json_data = df.to_json(orient="records", date_format="iso")
+            file_obj = io.BytesIO(json_data.encode("utf-8"))
+
+            logger.info(
+                f"Uploading {record_count} records to Bronze as JSON: {object_name}"
+            )
+            return self.upload_fileobj(
+                file_obj, self.BUCKET_BRONZE, object_name, metadata
+            )
 
     # ==========================================
     # Data Lake Operations - Silver Layer
@@ -521,6 +577,59 @@ class MinIOClient:
         except ClientError as e:
             logger.error(f"Error generating presigned URL: {e}")
             raise
+
+    # ==========================================
+    # State Management Operations
+    # ==========================================
+
+    def write_json_to_s3(self, bucket: str, key: str, data: Union[Dict, List]) -> str:
+        """
+        Write JSON data to S3.
+
+        Args:
+            bucket: Target bucket name
+            key: S3 object key
+            data: Data to write (dict or list)
+
+        Returns:
+            S3 object key
+
+        Example:
+            >>> client.write_json_to_s3(
+            ...     'bronze',
+            ...     'pncp/_state/state_20251022.json',
+            ...     {'processed_ids': ['001', '002']}
+            ... )
+        """
+        try:
+            json_data = json.dumps(data, ensure_ascii=False, indent=2)
+            file_obj = io.BytesIO(json_data.encode("utf-8"))
+
+            self.upload_fileobj(file_obj, bucket, key)
+            logger.info(f"Wrote JSON to s3://{bucket}/{key}")
+            return key
+
+        except Exception as e:
+            logger.error(f"Error writing JSON to {key}: {e}")
+            raise
+
+    def ensure_buckets_exist(self) -> None:
+        """
+        Ensure all required Data Lake buckets exist.
+
+        Creates buckets if they don't exist yet.
+        """
+        buckets = [
+            self.BUCKET_BRONZE,
+            self.BUCKET_SILVER,
+            self.BUCKET_GOLD,
+            self.BUCKET_MLFLOW,
+            self.BUCKET_BACKUPS,
+            self.BUCKET_TMP,
+        ]
+
+        for bucket in buckets:
+            self.create_bucket(bucket)
 
 
 # Example usage
