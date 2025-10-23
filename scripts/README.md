@@ -119,40 +119,214 @@ python scripts/report_pncp_bronze.py --start-date 2025-10-01 --detailed --verbos
 
 ---
 
+### 3. `run_pncp_details_ingestion.py` - Ingestão de Detalhes (Itens + Arquivos)
+
+Script standalone para buscar itens e arquivos (documentos) das contratações PNCP.
+
+**Uso:**
+```bash
+# Buscar detalhes para data específica
+python scripts/run_pncp_details_ingestion.py --date 20251022
+
+# Auto-resume: processa em batches e continua de onde parou
+python scripts/run_pncp_details_ingestion.py --date 20251022 --batch-size 100 --auto-resume
+
+# Teste com limite de contratações
+python scripts/run_pncp_details_ingestion.py --date 20251022 --max-contratacoes 10
+
+# Ignorar state management (buscar tudo)
+python scripts/run_pncp_details_ingestion.py --date 20251022 --no-state-filter
+
+# Salvar cópia local
+python scripts/run_pncp_details_ingestion.py --date 20251022 --output-file output/details.json
+
+# Modo verbose
+python scripts/run_pncp_details_ingestion.py --date 20251022 --verbose
+```
+
+**Características:**
+- ✅ Lê contratações da camada Bronze
+- ✅ Busca itens via API PNCP: `/v1/orgaos/{cnpj}/compras/{ano}/{seq}/itens`
+- ✅ Busca arquivos via API: `/v1/orgaos/{cnpj}/compras/{ano}/{seq}/arquivos`
+- ✅ State management granular (itens e arquivos separados)
+- ✅ Estrutura nested/hierárquica (1 JSON por dia)
+- ✅ Rate limiting respeitoso (0.5s entre requests)
+- ✅ Processamento sequencial (sem threads)
+
+**Estrutura de saída (JSON nested):**
+```json
+[
+  {
+    "cnpj": "83102277000152",
+    "anoCompra": 2025,
+    "sequencialCompra": 423,
+    "numeroControlePNCP": "...",
+    "itens": [
+      {
+        "numeroItem": 1,
+        "descricao": "kit de fitas reagentes...",
+        "valorUnitarioEstimado": 117.19,
+        "quantidade": 10,
+        "situacaoCompraItem": 1,
+        "_parsed_domains": {...}
+      }
+    ],
+    "arquivos": [
+      {
+        "tipoDocumentoId": 2,
+        "titulo": "EDITAL",
+        "url": "https://...",
+        "_parsed_domains": {...}
+      }
+    ],
+    "metadata": {
+      "total_itens": 2,
+      "total_arquivos": 5,
+      "fetch_timestamp": "2025-10-23T..."
+    }
+  }
+]
+```
+
+**Performance:**
+- 1,000 contratações = 2,000 API calls (~17 minutos)
+- State filtering reduz 80%+ duplicatas em re-runs
+
+---
+
+### 4. `report_pncp_details.py` - Relatório de Detalhes
+
+Gera relatórios estatísticos sobre itens e arquivos das contratações.
+
+**Uso:**
+```bash
+# Relatório para data específica
+python scripts/report_pncp_details.py --date 20251022
+
+# Período de datas
+python scripts/report_pncp_details.py --start-date 20251001 --end-date 20251031
+
+# Com detalhamento diário
+python scripts/report_pncp_details.py --date 20251022 --detailed
+
+# Exportar para JSON
+python scripts/report_pncp_details.py --date 20251022 --output report.json
+
+# Modo verbose
+python scripts/report_pncp_details.py --date 20251022 --verbose
+```
+
+**Saída do relatório:**
+```
+================================================================================
+PNCP DETAILS REPORT
+================================================================================
+
+📅 Period: 2025-10-22 to 2025-10-22
+   Duration: 1 days
+
+📊 Summary:
+   Total contratacoes: 1,250
+   Total itens: 3,845
+   Total arquivos: 6,125
+   Avg itens/contratacao: 3.08
+   Avg arquivos/contratacao: 4.90
+
+📦 Itens by Category:
+   Material                                      2,150 ( 55.9%)
+   Serviço                                       1,320 ( 34.3%)
+   Obras                                           245 (  6.4%)
+   Soluções de TIC                                 130 (  3.4%)
+
+📋 Itens by Status:
+   Em Andamento                                  2,980 ( 77.5%)
+   Homologado                                      640 ( 16.6%)
+   Deserto                                         150 (  3.9%)
+
+📄 Arquivos by Type:
+   Edital                                        1,250 ( 20.4%)
+   Termo de Referência                           1,180 ( 19.3%)
+   Projeto Básico                                  880 ( 14.4%)
+   Minuta do Contrato                              750 ( 12.2%)
+
+📆 Daily Breakdown:  # Apenas com --detailed
+   Date         Contratacoes         Itens   Arquivos
+   ------------ --------------- ---------- ----------
+   2025-10-22             1,250      3,845      6,125
+
+================================================================================
+```
+
+**Informações fornecidas:**
+1. **Summary**: Totais e médias
+2. **Itens por categoria**: Material, Serviço, Obras, TIC, etc.
+3. **Itens por status**: Em andamento, Homologado, Deserto, Fracassado
+4. **Arquivos por tipo**: Edital, Termo de Referência, Projeto Básico, etc.
+5. **Daily breakdown**: Detalhamento diário (com `--detailed`)
+
+---
+
 ## Estrutura de Dados
 
 ### Bronze Layer (MinIO)
 
 ```
 lh-bronze/
-└── pncp/
+├── pncp/                                  # Contratações
+│   ├── year=2025/
+│   │   └── month=10/
+│   │       ├── day=22/
+│   │       │   └── pncp_20251022_000000.parquet
+│   │       └── day=23/
+│   │           ├── pncp_20251023_000000.parquet
+│   │           ├── pncp_20251023_020000.parquet
+│   │           └── pncp_20251023_130000.parquet
+│   └── _state/
+│       └── year=2025/
+│           └── month=10/
+│               └── day=23/
+│                   └── state_20251023.json
+│
+└── pncp_details/                          # Itens + Arquivos (NOVO)
     ├── year=2025/
     │   └── month=10/
     │       ├── day=22/
-    │       │   └── pncp_20251022_000000.parquet
+    │       │   └── details.json
     │       └── day=23/
-    │           ├── pncp_20251023_000000.parquet
-    │           ├── pncp_20251023_020000.parquet
-    │           └── pncp_20251023_130000.parquet
+    │           └── details.json
     └── _state/
-        └── year=2025/
-            └── month=10/
-                └── day=23/
-                    └── state_20251023.json
+        ├── itens/                         # State granular para itens
+        │   └── year=2025/
+        │       └── month=10/
+        │           └── day=23/
+        │               └── state_20251023.json
+        └── arquivos/                      # State granular para arquivos
+            └── year=2025/
+                └── month=10/
+                    └── day=23/
+                        └── state_20251023.json
 ```
 
 ### Formato dos Arquivos
 
-**Parquet (dados):**
+**Parquet (contratações):**
 - Formato colunar binário
 - Compressão snappy
 - 35 colunas de metadados PNCP
 - Particionamento por ano/mês/dia
 
+**JSON (detalhes - itens + arquivos):**
+- Estrutura nested/hierárquica
+- 1 arquivo por dia
+- Array de contratações com itens e arquivos aninhados
+- Enriquecido com `_parsed_domains` (enums legíveis)
+
 **JSON (estado):**
-- Lista de IDs processados
+- Lista de IDs processados (contratações)
+- Lista de chaves processadas (detalhes: `cnpj|ano|sequencial`)
 - Metadados de ingestão
 - Timestamps de atualização
+- Estatísticas de execuções
 
 ---
 

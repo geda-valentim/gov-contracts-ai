@@ -386,6 +386,223 @@ class StateManager:
         self._state_cache.clear()
         logger.info("State cache cleared")
 
+    def get_details_state_key(
+        self, source: str, date: datetime, detail_type: str
+    ) -> str:
+        """
+        Generate S3 key for granular details state file.
+
+        Args:
+            source: Data source name (e.g., 'pncp_details')
+            date: Date for state file
+            detail_type: Type of detail ('itens' or 'arquivos')
+
+        Returns:
+            S3 key for state file
+
+        Example:
+            >>> manager = StateManager()
+            >>> key = manager.get_details_state_key('pncp_details', datetime(2025, 10, 22), 'itens')
+            >>> print(key)
+            'pncp_details/_state/itens/year=2025/month=10/day=22/state_20251022.json'
+        """
+        state_key = (
+            f"{source}/_state/{detail_type}/year={date.year}/month={date.month:02d}/"
+            f"day={date.day:02d}/state_{date.strftime('%Y%m%d')}.json"
+        )
+        return state_key
+
+    def filter_new_details(
+        self,
+        source: str,
+        date: datetime,
+        contratacoes: List[Dict],
+        detail_type: str,
+        key_extractor_fn,
+    ) -> tuple[List[Dict], Dict[str, int]]:
+        """
+        Filter contratacoes to only include those not yet processed for specific detail type.
+
+        This enables granular state management where itens and arquivos can be
+        processed independently.
+
+        Args:
+            source: Data source name (e.g., 'pncp_details')
+            date: Date for state file
+            contratacoes: List of contratacao dicts
+            detail_type: Type of detail ('itens' or 'arquivos')
+            key_extractor_fn: Function to extract composite key from contratacao
+
+        Returns:
+            Tuple of (filtered_contratacoes, stats_dict)
+
+        Example:
+            >>> manager = StateManager()
+            >>> from backend.app.services.ingestion.pncp_details import PNCPDetailsIngestionService
+            >>> contratacoes = [...]
+            >>> new_contratacoes, stats = manager.filter_new_details(
+            ...     'pncp_details',
+            ...     datetime(2025, 10, 22),
+            ...     contratacoes,
+            ...     'itens',
+            ...     PNCPDetailsIngestionService.extract_key_from_contratacao
+            ... )
+        """
+        if not contratacoes:
+            logger.info("No contratacoes to filter")
+            return [], {
+                "total_input": 0,
+                "already_processed": 0,
+                "new_records": 0,
+                "filter_rate": 0,
+            }
+
+        # Load processed keys for this detail type
+        state_key = self.get_details_state_key(source, date, detail_type)
+        cache_key = f"{source}_{detail_type}_{date.strftime('%Y%m%d')}"
+
+        # Try to load existing state
+        try:
+            state_data = self.storage_client.read_json_from_s3(
+                bucket=self.storage_client.BUCKET_BRONZE, key=state_key
+            )
+            processed_keys = set(state_data.get("processed_keys", []))
+            logger.info(
+                f"Loaded {detail_type} state: {len(processed_keys)} processed keys"
+            )
+        except Exception:
+            # No state file exists yet
+            processed_keys = set()
+            logger.info(f"No existing {detail_type} state, starting fresh")
+
+        # Filter contratacoes
+        new_contratacoes = []
+        for contratacao in contratacoes:
+            key = key_extractor_fn(contratacao)
+
+            if not key:
+                logger.warning(f"Could not extract key from contratacao, skipping")
+                continue
+
+            if key not in processed_keys:
+                new_contratacoes.append(contratacao)
+
+        # Calculate statistics
+        total_input = len(contratacoes)
+        already_processed = total_input - len(new_contratacoes)
+        new_count = len(new_contratacoes)
+        filter_rate = (already_processed / total_input * 100) if total_input > 0 else 0
+
+        stats = {
+            "total_input": total_input,
+            "already_processed": already_processed,
+            "new_records": new_count,
+            "filter_rate": round(filter_rate, 2),
+        }
+
+        logger.info(
+            f"Filtered {detail_type}: {total_input} input → {new_count} new "
+            f"({already_processed} already processed, {filter_rate:.1f}% filtered)"
+        )
+
+        return new_contratacoes, stats
+
+    def update_details_state(
+        self,
+        source: str,
+        date: datetime,
+        detail_type: str,
+        new_keys: List[str],
+        execution_metadata: Optional[Dict] = None,
+    ) -> Dict[str, Any]:
+        """
+        Update granular details state with new processed keys.
+
+        Args:
+            source: Data source name (e.g., 'pncp_details')
+            date: Date for state file
+            detail_type: Type of detail ('itens' or 'arquivos')
+            new_keys: List of new composite keys to add
+            execution_metadata: Optional metadata about this execution
+
+        Returns:
+            Updated state dict
+
+        Example:
+            >>> manager = StateManager()
+            >>> updated = manager.update_details_state(
+            ...     'pncp_details',
+            ...     datetime(2025, 10, 22),
+            ...     'itens',
+            ...     ['83102277000152|2025|423', '12345678000190|2025|424'],
+            ...     {'new_records': 2, 'total_itens': 45}
+            ... )
+        """
+        state_key = self.get_details_state_key(source, date, detail_type)
+        cache_key = f"{source}_{detail_type}_{date.strftime('%Y%m%d')}"
+
+        # Try to load existing state
+        try:
+            state_data = self.storage_client.read_json_from_s3(
+                bucket=self.storage_client.BUCKET_BRONZE, key=state_key
+            )
+            logger.info(f"Loaded existing {detail_type} state for update")
+        except Exception:
+            # Create new state
+            state_data = {
+                "date": date.strftime("%Y-%m-%d"),
+                "detail_type": detail_type,
+                "processed_keys": [],
+                "last_execution": None,
+                "total_processed": 0,
+                "executions": [],
+                "created_at": datetime.now().isoformat(),
+            }
+            logger.info(f"Created new {detail_type} state")
+
+        # Get existing processed keys as set
+        processed_keys_set = set(state_data.get("processed_keys", []))
+
+        # Add new keys
+        original_count = len(processed_keys_set)
+        processed_keys_set.update(new_keys)
+        actually_new = len(processed_keys_set) - original_count
+
+        logger.info(
+            f"Updating {detail_type} state: {len(new_keys)} keys provided, "
+            f"{actually_new} actually new"
+        )
+
+        # Update state
+        state_data["processed_keys"] = sorted(list(processed_keys_set))
+        state_data["last_execution"] = datetime.now().isoformat()
+        state_data["total_processed"] = len(processed_keys_set)
+
+        # Add execution metadata
+        if "executions" not in state_data:
+            state_data["executions"] = []
+
+        execution_record = {
+            "timestamp": datetime.now().isoformat(),
+            "new_records": actually_new,
+            **(execution_metadata or {}),
+        }
+        state_data["executions"].append(execution_record)
+
+        # Save updated state
+        self.storage_client.write_json_to_s3(
+            bucket=self.storage_client.BUCKET_BRONZE, key=state_key, data=state_data
+        )
+
+        # Update cache
+        self._state_cache[cache_key] = state_data
+
+        logger.info(
+            f"Saved {detail_type} state: {state_data['total_processed']} total processed keys"
+        )
+
+        return state_data
+
 
 # Standalone execution for testing
 if __name__ == "__main__":

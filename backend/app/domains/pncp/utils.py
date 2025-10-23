@@ -7,10 +7,14 @@ Helper functions for working with PNCP domain enums.
 from enum import Enum
 from typing import Optional
 
+from .categoria_item_plano import CategoriaItemPlano
 from .criterio_julgamento import CriterioJulgamento
 from .instrumento_convocatorio import InstrumentoConvocatorio
 from .modalidade_contratacao import ModalidadeContratacao
 from .modo_disputa import ModoDisputa
+from .situacao_item_contratacao import SituacaoItemContratacao
+from .situacao_resultado_item import SituacaoResultadoItem
+from .tipo_documento import TipoDocumento
 
 
 def get_enum_by_code(enum_class: type[Enum], code: int) -> Optional[Enum]:
@@ -132,5 +136,97 @@ def parse_api_response_codes(data: dict) -> dict:
         result["instrumentoConvocatorio"] = get_enum_by_code(
             InstrumentoConvocatorio, data["instrumentoConvocatorioId"]
         )
+
+    return result
+
+
+def parse_item_response_codes(item: dict) -> dict:
+    """
+    Converte códigos de resposta da API de itens em enums legíveis.
+
+    Args:
+        item: Dict com resposta da API de itens
+
+    Returns:
+        Dict com enums mapeados e descrições
+
+    Example:
+        >>> parse_item_response_codes({
+        ...     "itemCategoriaId": 1,
+        ...     "situacaoCompraItem": 2,
+        ...     "criterioJulgamentoId": 1
+        ... })
+        {
+            'categoria': <CategoriaItemPlano.MATERIAL: 1>,
+            'categoria_descricao': 'Material',
+            'situacao': <SituacaoItemContratacao.HOMOLOGADO: 2>,
+            'situacao_descricao': 'Homologado - Resultado definido com fornecedor',
+            'criterio_julgamento': <CriterioJulgamento.MENOR_PRECO: 1>
+        }
+    """
+    result = {}
+
+    # Categoria do item
+    if "itemCategoriaId" in item:
+        cat_enum = get_enum_by_code(CategoriaItemPlano, item["itemCategoriaId"])
+        result["categoria"] = cat_enum
+        if cat_enum:
+            result["categoria_descricao"] = cat_enum.descricao
+
+    # Situação do item na contratação
+    if "situacaoCompraItem" in item:
+        sit_enum = get_enum_by_code(SituacaoItemContratacao, item["situacaoCompraItem"])
+        result["situacao"] = sit_enum
+        if sit_enum:
+            result["situacao_descricao"] = sit_enum.descricao
+            result["situacao_has_winner"] = sit_enum.has_winner
+
+    # Critério de julgamento
+    if "criterioJulgamentoId" in item:
+        result["criterio_julgamento"] = get_enum_by_code(
+            CriterioJulgamento, item["criterioJulgamentoId"]
+        )
+
+    # Material ou Serviço (M ou S)
+    if "materialOuServico" in item:
+        result["tipo_material_servico"] = (
+            "Material" if item["materialOuServico"] == "M" else "Serviço"
+        )
+
+    return result
+
+
+def parse_arquivo_response_codes(arquivo: dict) -> dict:
+    """
+    Converte códigos de resposta da API de arquivos em enums legíveis.
+
+    Args:
+        arquivo: Dict com resposta da API de arquivos
+
+    Returns:
+        Dict com enums mapeados e descrições
+
+    Example:
+        >>> parse_arquivo_response_codes({
+        ...     "tipoDocumentoId": 2,
+        ...     "titulo": "EDITAL"
+        ... })
+        {
+            'tipo_documento': <TipoDocumento.EDITAL: 2>,
+            'tipo_documento_descricao': 'Edital'
+        }
+    """
+    result = {}
+
+    # Tipo de documento
+    if "tipoDocumentoId" in arquivo:
+        tipo_enum = get_enum_by_code(TipoDocumento, arquivo["tipoDocumentoId"])
+        result["tipo_documento"] = tipo_enum
+        if tipo_enum:
+            result["tipo_documento_descricao"] = tipo_enum.descricao
+
+    # Status ativo
+    if "statusAtivo" in arquivo:
+        result["arquivo_ativo"] = arquivo["statusAtivo"]
 
     return result

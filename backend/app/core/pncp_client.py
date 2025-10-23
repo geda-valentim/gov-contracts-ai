@@ -233,6 +233,248 @@ class PNCPClient:
             data_final=end_date.strftime("%Y%m%d"),
         )
 
+    def fetch_itens_contratacao(
+        self,
+        cnpj: str,
+        ano: int,
+        sequencial: int,
+        pagina: int = 1,
+        tamanho_pagina: int = 100,
+    ) -> List[Dict]:
+        """
+        Busca itens de uma contratação específica.
+
+        Args:
+            cnpj: CNPJ do órgão (ex: "83102277000152")
+            ano: Ano da compra (ex: 2025)
+            sequencial: Número sequencial da compra (ex: 423)
+            pagina: Número da página (padrão: 1)
+            tamanho_pagina: Registros por página (padrão: 100, max: 100)
+
+        Returns:
+            Lista de itens da contratação
+
+        Example:
+            >>> client.fetch_itens_contratacao(
+            ...     cnpj="83102277000152",
+            ...     ano=2025,
+            ...     sequencial=423
+            ... )
+        """
+        url = f"{self.base_url_integration}/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens"
+
+        params = {
+            "pagina": pagina,
+            "tamanhoPagina": tamanho_pagina,
+        }
+
+        response = self._make_request(url, params=params, timeout=30)
+
+        # Handle empty responses
+        if not response.content or response.content.strip() == b"":
+            logger.warning(
+                f"No items found for contratacao {cnpj}/{ano}/{sequencial}"
+            )
+            return []
+
+        try:
+            result = response.json()
+        except ValueError as e:
+            logger.warning(
+                f"Invalid JSON response for items {cnpj}/{ano}/{sequencial}: {e}"
+            )
+            return []
+
+        # API returns array directly (not wrapped in {"data": [...]})
+        items = result if isinstance(result, list) else result.get("data", [])
+
+        # Enrich with parsed domain codes
+        from ..domains.pncp.utils import parse_item_response_codes
+
+        for item in items:
+            item["_parsed_domains"] = parse_item_response_codes(item)
+
+        logger.info(f"Fetched {len(items)} items for {cnpj}/{ano}/{sequencial}")
+
+        return items
+
+    def fetch_all_itens_contratacao(
+        self,
+        cnpj: str,
+        ano: int,
+        sequencial: int,
+    ) -> List[Dict]:
+        """
+        Busca TODOS os itens de uma contratação (paginando automaticamente).
+
+        Args:
+            cnpj: CNPJ do órgão
+            ano: Ano da compra
+            sequencial: Número sequencial da compra
+
+        Returns:
+            Lista completa de itens da contratação
+
+        Example:
+            >>> client.fetch_all_itens_contratacao(
+            ...     cnpj="83102277000152",
+            ...     ano=2025,
+            ...     sequencial=423
+            ... )
+        """
+        all_items = []
+        pagina = 1
+
+        while True:
+            logger.debug(f"Fetching items page {pagina} for {cnpj}/{ano}/{sequencial}")
+
+            items = self.fetch_itens_contratacao(
+                cnpj=cnpj,
+                ano=ano,
+                sequencial=sequencial,
+                pagina=pagina,
+            )
+
+            if not items:
+                break
+
+            all_items.extend(items)
+
+            # If we got less than page size, we're done
+            if len(items) < 100:
+                break
+
+            pagina += 1
+
+        logger.info(
+            f"Total items fetched: {len(all_items)} for {cnpj}/{ano}/{sequencial}"
+        )
+
+        return all_items
+
+    def fetch_arquivos_contratacao(
+        self,
+        cnpj: str,
+        ano: int,
+        sequencial: int,
+        pagina: int = 1,
+        tamanho_pagina: int = 100,
+    ) -> List[Dict]:
+        """
+        Busca arquivos/documentos de uma contratação específica.
+
+        Args:
+            cnpj: CNPJ do órgão (ex: "83102277000152")
+            ano: Ano da compra (ex: 2025)
+            sequencial: Número sequencial da compra (ex: 423)
+            pagina: Número da página (padrão: 1)
+            tamanho_pagina: Registros por página (padrão: 100, max: 100)
+
+        Returns:
+            Lista de arquivos/documentos da contratação
+
+        Example:
+            >>> client.fetch_arquivos_contratacao(
+            ...     cnpj="83102277000152",
+            ...     ano=2025,
+            ...     sequencial=423
+            ... )
+        """
+        url = f"{self.base_url_integration}/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/arquivos"
+
+        params = {
+            "pagina": pagina,
+            "tamanhoPagina": tamanho_pagina,
+        }
+
+        response = self._make_request(url, params=params, timeout=30)
+
+        # Handle empty responses
+        if not response.content or response.content.strip() == b"":
+            logger.warning(
+                f"No arquivos found for contratacao {cnpj}/{ano}/{sequencial}"
+            )
+            return []
+
+        try:
+            result = response.json()
+        except ValueError as e:
+            logger.warning(
+                f"Invalid JSON response for arquivos {cnpj}/{ano}/{sequencial}: {e}"
+            )
+            return []
+
+        # API returns array directly
+        arquivos = result if isinstance(result, list) else result.get("data", [])
+
+        # Enrich with parsed domain codes
+        from ..domains.pncp.utils import parse_arquivo_response_codes
+
+        for arquivo in arquivos:
+            arquivo["_parsed_domains"] = parse_arquivo_response_codes(arquivo)
+
+        logger.info(
+            f"Fetched {len(arquivos)} arquivos for {cnpj}/{ano}/{sequencial}"
+        )
+
+        return arquivos
+
+    def fetch_all_arquivos_contratacao(
+        self,
+        cnpj: str,
+        ano: int,
+        sequencial: int,
+    ) -> List[Dict]:
+        """
+        Busca TODOS os arquivos de uma contratação (paginando automaticamente).
+
+        Args:
+            cnpj: CNPJ do órgão
+            ano: Ano da compra
+            sequencial: Número sequencial da compra
+
+        Returns:
+            Lista completa de arquivos da contratação
+
+        Example:
+            >>> client.fetch_all_arquivos_contratacao(
+            ...     cnpj="83102277000152",
+            ...     ano=2025,
+            ...     sequencial=423
+            ... )
+        """
+        all_arquivos = []
+        pagina = 1
+
+        while True:
+            logger.debug(
+                f"Fetching arquivos page {pagina} for {cnpj}/{ano}/{sequencial}"
+            )
+
+            arquivos = self.fetch_arquivos_contratacao(
+                cnpj=cnpj,
+                ano=ano,
+                sequencial=sequencial,
+                pagina=pagina,
+            )
+
+            if not arquivos:
+                break
+
+            all_arquivos.extend(arquivos)
+
+            # If we got less than page size, we're done
+            if len(arquivos) < 100:
+                break
+
+            pagina += 1
+
+        logger.info(
+            f"Total arquivos fetched: {len(all_arquivos)} for {cnpj}/{ano}/{sequencial}"
+        )
+
+        return all_arquivos
+
 
 # Exemplo de uso
 if __name__ == "__main__":

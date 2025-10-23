@@ -72,10 +72,16 @@ alembic revision --autogenerate -m "description"
 # Seed data
 python scripts/seed_data.py
 
-# Generate Bronze layer report
-python scripts/report_pncp_bronze.py                # Last 30 days
+# Generate Bronze layer reports
+python scripts/report_pncp_bronze.py                # Last 30 days (contratacoes)
 python scripts/report_pncp_bronze.py --detailed     # With daily breakdown
 python scripts/report_pncp_bronze.py --start-date 2025-10-01 --end-date 2025-10-31
+
+# PNCP Details (itens + arquivos) ingestion and reports
+python scripts/run_pncp_details_ingestion.py --date 20251022                    # Fetch details
+python scripts/run_pncp_details_ingestion.py --date 20251022 --max-contratacoes 10  # Test with limit
+python scripts/report_pncp_details.py --date 20251022                           # Details report
+python scripts/report_pncp_details.py --start-date 20251001 --end-date 20251031  # Date range
 ```
 
 ### ML Development
