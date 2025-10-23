@@ -1,0 +1,28 @@
+# Requirements for standalone scripts (scripts/*.py)
+#
+# This file contains minimal dependencies needed to run utility scripts
+# outside of Docker/Airflow environment.
+#
+# Installation:
+#   python3 -m venv .venv
+#   source .venv/bin/activate
+#   pip install -r requirements-scripts.txt
+#
+# Usage:
+#   python scripts/report_pncp_bronze.py
+#   python scripts/run_pncp_ingestion.py
+
+# Data manipulation
+pandas>=2.0.0
+
+# AWS S3 / MinIO client
+boto3>=1.28.0
+
+# Parquet support
+pyarrow>=12.0.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# HTTP requests (for PNCP API)
+requests>=2.31.0

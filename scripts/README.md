@@ -180,13 +180,39 @@ Para DAGs do Airflow, o endpoint é `http://minio:9000` (configurado automaticam
 
 ## Dependências
 
+### Opção 1: Ambiente Virtual Isolado (Recomendado para CLI)
+
 ```bash
-# Instalar dependências do projeto
+# Criar ambiente virtual
+python3 -m venv .venv
+
+# Ativar (Linux/Mac)
+source .venv/bin/activate
+
+# Ativar (Windows)
+.venv\Scripts\activate
+
+# Instalar dependências
+pip install -r requirements-scripts.txt
+
+# Rodar scripts
+python scripts/report_pncp_bronze.py
+python scripts/run_pncp_ingestion.py
+```
+
+### Opção 2: Poetry (Desenvolvimento Backend)
+
+```bash
 cd backend
 poetry install
+poetry run python ../scripts/report_pncp_bronze.py
+```
 
-# Ou usar pip diretamente
-pip install pandas pyarrow httpx tenacity boto3 python-dotenv minio
+### Opção 3: Docker (Airflow)
+
+```bash
+docker compose -f airflow/compose.yml exec airflow-webserver \
+  python3 /opt/airflow/scripts/report_pncp_bronze.py
 ```
 
 ---
