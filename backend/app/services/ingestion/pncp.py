@@ -6,7 +6,7 @@ No Airflow dependencies - pure Python business logic.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List, Optional
 
 from backend.app.core.pncp_client import PNCPClient
@@ -199,7 +199,7 @@ class PNCPIngestionService:
             ...     execution_date=datetime(2024, 10, 22)
             ... )
         """
-        # Fetch previous day's data (run at 2 AM for yesterday)
+        # Fetch data for execution_date (Airflow already provides the correct date)
         # Convert UTC to Brazil timezone (BRT/BRST - UTC-3)
         import pytz
 
@@ -211,9 +211,11 @@ class PNCPIngestionService:
         else:
             execution_date_utc = execution_date.astimezone(pytz.UTC)
 
-        # Convert to Brazil timezone and get previous day
+        # Convert to Brazil timezone - use execution_date directly
+        # NOTE: Airflow's execution_date already represents the data interval start,
+        # so we don't need to subtract 1 day (that was causing data to be saved in wrong partitions)
         execution_date_br = execution_date_utc.astimezone(brazil_tz)
-        target_date = execution_date_br - timedelta(days=1)
+        target_date = execution_date_br  # Use execution_date directly, no subtraction
 
         data_inicial = target_date.strftime("%Y%m%d")
         data_final = data_inicial
