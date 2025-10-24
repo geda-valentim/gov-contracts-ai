@@ -210,7 +210,9 @@ def generate_report(
     # Calculate statistics
     total_records = len(combined_df)
 
-    # Unique licitações by sequencialCompra
+    # Unique licitações by sequencialCompra (processo licitatório)
+    # NOTE: Each licitação can have multiple items/modalidades (numeroControlePNCP)
+    # So total_records > unique_licitacoes is EXPECTED and NOT a duplicate issue
     if "sequencialCompra" in combined_df.columns:
         unique_licitacoes = combined_df["sequencialCompra"].nunique()
         id_column = "sequencialCompra"
@@ -289,6 +291,11 @@ def print_report(report: Dict):
         )
     else:
         print(f"   Licitações únicas: {report['unique_licitacoes']:,}")
+
+    # Add note about records vs licitações
+    if report['total_records'] > report['unique_licitacoes']:
+        ratio = report['total_records'] / report['unique_licitacoes']
+        print(f"   ℹ️  Média de {ratio:.1f} registros por licitação (itens/modalidades)")
     print()
 
     # By year
