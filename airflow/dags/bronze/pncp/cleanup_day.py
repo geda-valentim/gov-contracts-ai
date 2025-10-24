@@ -33,8 +33,8 @@ from typing import Dict
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-# Import standalone services (no Airflow dependencies)
-from backend.app.core.storage_client import get_storage_client
+# Import MinIO client from utils
+from utils.clients import get_minio_client
 
 
 # DAG default arguments
@@ -84,8 +84,8 @@ def cleanup_day_data(**context) -> Dict:
     # Check dry-run flag
     dry_run = dag_run.conf.get("dry_run", False)
 
-    # Initialize storage client
-    storage = get_storage_client()
+    # Initialize MinIO client
+    minio_client = get_minio_client()
 
     print(f"\n{'=' * 70}")
     print("🧹 PNCP DATA CLEANUP")
@@ -123,7 +123,7 @@ def cleanup_day_data(**context) -> Dict:
             print(f"\n📁 Cleaning prefix: {prefix}")
 
             # List objects
-            objects = storage.list_objects(bucket=storage.BUCKET_BRONZE, prefix=prefix)
+            objects = minio_client.list_objects(bucket=minio_client.BUCKET_BRONZE, prefix=prefix)
 
             if not objects:
                 print(f"   ℹ️  No objects found")
@@ -148,8 +148,8 @@ def cleanup_day_data(**context) -> Dict:
                 deleted = 0
                 for obj in objects:
                     try:
-                        storage._client.delete_object(
-                            bucket_name=storage.BUCKET_BRONZE, object_name=obj["Key"]
+                        minio_client.delete_object(
+                            bucket_name=minio_client.BUCKET_BRONZE, object_name=obj["Key"]
                         )
                         deleted += 1
                     except Exception as e:
