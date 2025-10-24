@@ -512,7 +512,26 @@ class PNCPDetailsIngestionService:
             # Concatenate all DataFrames
             if dfs:
                 combined_df = pd.concat(dfs, ignore_index=True)
-                logger.info(f"Loaded {len(combined_df)} contratacoes from Bronze")
+                total_before = len(combined_df)
+
+                # ✅ DEDUPLICATE by numeroControlePNCP (multiple files may have duplicates)
+                if "numeroControlePNCP" in combined_df.columns:
+                    combined_df = combined_df.drop_duplicates(
+                        subset=["numeroControlePNCP"], keep="first"
+                    )
+                    total_after = len(combined_df)
+                    duplicates_removed = total_before - total_after
+
+                    logger.info(
+                        f"Loaded {total_before} contratacoes from Bronze → "
+                        f"{total_after} unique ({duplicates_removed} duplicates removed)"
+                    )
+                else:
+                    logger.warning(
+                        "numeroControlePNCP column not found - skipping deduplication"
+                    )
+                    logger.info(f"Loaded {total_before} contratacoes from Bronze")
+
                 return combined_df.to_dict(orient="records")
             else:
                 return []
