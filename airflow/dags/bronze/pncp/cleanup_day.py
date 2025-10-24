@@ -67,9 +67,11 @@ def cleanup_day_data(**context) -> Dict:
         Dict with cleanup statistics
     """
     dag_run = context.get("dag_run")
-    execution_date = context.get("execution_date")
 
-    # Get target date from DAG conf or use execution_date
+    # Try different date fields (Airflow 3.x vs 2.x compatibility)
+    logical_date = context.get("logical_date") or context.get("execution_date")
+
+    # Get target date from DAG conf or use logical_date
     target_date_str = None
     if dag_run and dag_run.conf:
         target_date_str = dag_run.conf.get("target_date")
@@ -83,10 +85,16 @@ def cleanup_day_data(**context) -> Dict:
                 f"Invalid target_date format: {target_date_str}. Use YYYY-MM-DD"
             ) from e
     else:
-        # Use execution_date (logical date) if no config provided
-        target_date = execution_date
+        # Use logical_date if no config provided
+        if logical_date is None:
+            raise ValueError(
+                "No target_date in config and no logical_date available. "
+                "Please provide target_date in DAG conf: "
+                '{"target_date": "YYYY-MM-DD"}'
+            )
+        target_date = logical_date
         target_date_str = target_date.strftime("%Y-%m-%d")
-        print(f"ℹ️  No target_date in config, using execution_date: {target_date_str}")
+        print(f"ℹ️  No target_date in config, using logical_date: {target_date_str}")
 
     # Check dry-run flag
     dry_run = False
