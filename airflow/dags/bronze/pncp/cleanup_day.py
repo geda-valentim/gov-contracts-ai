@@ -67,27 +67,31 @@ def cleanup_day_data(**context) -> Dict:
         Dict with cleanup statistics
     """
     dag_run = context.get("dag_run")
+    execution_date = context.get("execution_date")
 
-    # Get target date from DAG conf
-    if not dag_run or not dag_run.conf:
-        raise ValueError("DAG conf is required. Provide target_date in conf.")
+    # Get target date from DAG conf or use execution_date
+    target_date_str = None
+    if dag_run and dag_run.conf:
+        target_date_str = dag_run.conf.get("target_date")
 
-    target_date_str = dag_run.conf.get("target_date")
-    if not target_date_str:
-        raise ValueError(
-            "target_date is required in DAG conf. Example: '2025-10-23'"
-        )
-
-    # Parse target date
-    try:
-        target_date = datetime.strptime(target_date_str, "%Y-%m-%d")
-    except ValueError as e:
-        raise ValueError(
-            f"Invalid target_date format: {target_date_str}. Use YYYY-MM-DD"
-        ) from e
+    if target_date_str:
+        # Parse target date from config
+        try:
+            target_date = datetime.strptime(target_date_str, "%Y-%m-%d")
+        except ValueError as e:
+            raise ValueError(
+                f"Invalid target_date format: {target_date_str}. Use YYYY-MM-DD"
+            ) from e
+    else:
+        # Use execution_date (logical date) if no config provided
+        target_date = execution_date
+        target_date_str = target_date.strftime("%Y-%m-%d")
+        print(f"ℹ️  No target_date in config, using execution_date: {target_date_str}")
 
     # Check dry-run flag
-    dry_run = dag_run.conf.get("dry_run", False)
+    dry_run = False
+    if dag_run and dag_run.conf:
+        dry_run = dag_run.conf.get("dry_run", False)
 
     # Initialize MinIO client
     minio_client = get_minio_client()
@@ -128,7 +132,7 @@ def cleanup_day_data(**context) -> Dict:
             print(f"\n📁 Cleaning prefix: {prefix}")
 
             # List objects
-            objects = minio_client.list_objects(bucket=minio_client.BUCKET_BRONZE, prefix=prefix)
+            objects = minio_client.list_objects(minio_client.BUCKET_BRONZE, prefix=prefix)
 
             if not objects:
                 print(f"   ℹ️  No objects found")
