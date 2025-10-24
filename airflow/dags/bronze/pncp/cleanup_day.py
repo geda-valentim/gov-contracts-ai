@@ -27,6 +27,11 @@ airflow dags trigger bronze_pncp_cleanup_day \\
 ```
 """
 
+import sys
+
+sys.path.insert(0, "/opt/airflow")
+sys.path.insert(0, "/opt/airflow/dags")
+
 from datetime import datetime, timedelta
 from typing import Dict
 
