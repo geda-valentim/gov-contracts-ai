@@ -32,14 +32,16 @@ import sys
 sys.path.insert(0, "/opt/airflow")
 sys.path.insert(0, "/opt/airflow/dags")
 
+import pendulum
 from datetime import datetime, timedelta
 from typing import Dict
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-# Import MinIO client from utils
+# Import MinIO client and timezone utils
 from utils.clients import get_minio_client
+from utils.dates import to_sao_paulo
 
 
 # DAG default arguments
@@ -69,7 +71,7 @@ def cleanup_day_data(**context) -> Dict:
     dag_run = context.get("dag_run")
 
     # Try different date fields (Airflow 3.x vs 2.x compatibility)
-    logical_date = context.get("logical_date") or context.get("execution_date")
+    logical_date = context.get("logical_date") or context.get("data_interval_start")
 
     # Get target date from DAG conf or use logical_date
     target_date_str = None
@@ -77,24 +79,28 @@ def cleanup_day_data(**context) -> Dict:
         target_date_str = dag_run.conf.get("target_date")
 
     if target_date_str:
-        # Parse target date from config
+        # Parse target date from config (manual trigger)
         try:
             target_date = datetime.strptime(target_date_str, "%Y-%m-%d")
+            # Convert to São Paulo timezone for consistency
+            target_date = to_sao_paulo(target_date)
+            print(f"ℹ️  Using target_date from config: {target_date_str} (manual trigger)")
         except ValueError as e:
             raise ValueError(
                 f"Invalid target_date format: {target_date_str}. Use YYYY-MM-DD"
             ) from e
     else:
-        # Use logical_date if no config provided
+        # Use logical_date for backfill or scheduled runs
         if logical_date is None:
             raise ValueError(
                 "No target_date in config and no logical_date available. "
                 "Please provide target_date in DAG conf: "
                 '{"target_date": "YYYY-MM-DD"}'
             )
-        target_date = logical_date
+        # Convert to São Paulo timezone
+        target_date = to_sao_paulo(logical_date)
         target_date_str = target_date.strftime("%Y-%m-%d")
-        print(f"ℹ️  No target_date in config, using logical_date: {target_date_str}")
+        print(f"ℹ️  Using logical_date: {target_date_str} (backfill mode)")
 
     # Check dry-run flag
     dry_run = False
@@ -214,12 +220,13 @@ def cleanup_day_data(**context) -> Dict:
 with DAG(
     dag_id="bronze_pncp_cleanup_day",
     default_args=default_args,
-    description="Clean all PNCP data for a specific day (manual trigger only)",
-    schedule=None,  # No schedule - manual trigger only
-    start_date=datetime(2025, 10, 1),
-    catchup=False,
-    max_active_runs=1,
-    tags=["bronze", "pncp", "cleanup", "maintenance"],
+    description="Clean all PNCP data for a specific day (manual trigger or backfill)",
+    schedule="@daily",  # Daily schedule (paused by default - use for backfill)
+    start_date=pendulum.datetime(2025, 10, 1, tz="America/Sao_Paulo"),
+    catchup=True,  # ✅ Enable backfill support
+    max_active_runs=3,  # Allow multiple parallel cleanup operations
+    is_paused_upon_creation=True,  # ✅ Paused by default - won't run automatically
+    tags=["bronze", "pncp", "cleanup", "maintenance", "backfill"],
     doc_md=__doc__,
 ) as dag:
 
@@ -232,16 +239,22 @@ with DAG(
 
         Removes all PNCP data (contratações, details, state) for a specific day.
 
-        **Required DAG Conf:**
-        - `target_date`: Date to clean (format: YYYY-MM-DD)
-
-        **Optional DAG Conf:**
+        **Manual Trigger:**
+        - `target_date`: Date to clean (format: YYYY-MM-DD) - Optional if using backfill
         - `dry_run`: Set to `true` to list files without deleting (default: false)
 
-        **Example:**
+        **Example (Manual):**
         ```bash
         airflow dags trigger bronze_pncp_cleanup_day \\
           --conf '{"target_date": "2025-10-23"}'
+        ```
+
+        **Example (Backfill):**
+        ```bash
+        airflow dags backfill bronze_pncp_cleanup_day \\
+          --start-date 2025-10-01 \\
+          --end-date 2025-10-10 \\
+          --reset-dagruns
         ```
         """,
     )

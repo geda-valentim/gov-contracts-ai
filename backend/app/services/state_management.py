@@ -459,7 +459,6 @@ class StateManager:
 
         # Load processed keys for this detail type
         state_key = self.get_details_state_key(source, date, detail_type)
-        cache_key = f"{source}_{detail_type}_{date.strftime('%Y%m%d')}"
 
         # Try to load existing state
         try:
@@ -573,8 +572,8 @@ class StateManager:
             f"{actually_new} actually new"
         )
 
-        # Update state
-        state_data["processed_keys"] = sorted(list(processed_keys_set))
+        # Update state (no need to sort - order doesn't matter for lookups)
+        state_data["processed_keys"] = list(processed_keys_set)
         state_data["last_execution"] = datetime.now().isoformat()
         state_data["total_processed"] = len(processed_keys_set)
 

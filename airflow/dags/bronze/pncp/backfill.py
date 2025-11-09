@@ -19,8 +19,9 @@ import sys
 sys.path.insert(0, "/opt/airflow")
 sys.path.insert(0, "/opt/airflow/dags")
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
+import pendulum
 from airflow import DAG
 
 # Airflow 3.x imports
@@ -32,6 +33,9 @@ except ImportError:
 from backend.app.domains.pncp import ModalidadeContratacao
 from backend.app.services import DataTransformationService, StateManager
 from utils.clients import get_minio_client, get_pncp_client
+
+# Import centralized date utilities
+from dags.utils.dates import get_now_local, DEFAULT_TZ
 
 default_args = {
     "owner": "data-engineering",
@@ -58,10 +62,11 @@ def backfill_pncp_data(days_back: int = 90, **context) -> dict:
     state_manager = StateManager()
     transformation_service = DataTransformationService()
 
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=days_back)
+    # Use configured local timezone for business logic (from TZ env var)
+    end_date = get_now_local()
+    start_date = end_date.subtract(days=days_back)
 
-    print(f"🔄 Backfilling from {start_date.date()} to {end_date.date()}")
+    print(f"🔄 Backfilling from {start_date.date()} to {end_date.date()} ({DEFAULT_TZ})")
 
     # Fetch ALL modalidades (13 total)
     modalidades = ModalidadeContratacao.get_all()
@@ -77,9 +82,10 @@ def backfill_pncp_data(days_back: int = 90, **context) -> dict:
     current_date = start_date
 
     while current_date <= end_date:
-        date_str = current_date.strftime("%Y%m%d")
+        # Format date for API (YYYYMMDD)
+        date_str = current_date.format("YYYYMMDD")
 
-        print(f"\n📅 Processing {current_date.date()}...")
+        print(f"\n📅 Processing {current_date.date()} ({DEFAULT_TZ})...")
 
         day_data = []
 
@@ -96,7 +102,7 @@ def backfill_pncp_data(days_back: int = 90, **context) -> dict:
 
         if not day_data:
             print(f"  ⚠️  No data from API for {current_date.date()}")
-            current_date += timedelta(days=1)
+            current_date = current_date.add(days=1)
             continue
 
         # ===== INCREMENTAL STATE FILTERING =====
@@ -171,7 +177,7 @@ def backfill_pncp_data(days_back: int = 90, **context) -> dict:
         print(f"  💾 State updated: {len(new_ids)} IDs added")
 
         # Move to next day
-        current_date += timedelta(days=1)
+        current_date = current_date.add(days=1)
 
     print("\n" + "=" * 80)
     print("🎉 Backfill Complete!")
@@ -203,7 +209,7 @@ with DAG(
     default_args=default_args,
     description="Backfill of historical PNCP data with incremental state management",
     schedule=None,  # Manual trigger only
-    start_date=datetime(2025, 10, 1, tzinfo=UTC),
+    start_date=pendulum.datetime(2025, 10, 1, tz=DEFAULT_TZ),
     catchup=False,
     max_active_runs=1,
     tags=["bronze", "pncp", "backfill", "manual", "incremental"],

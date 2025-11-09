@@ -6,10 +6,11 @@ without changing application code.
 
 Usage:
     from backend.app.core.storage_client import get_storage_client
+    from backend.app.core.datetime_utils import get_now_sao_paulo
 
     # Automatically selects MinIO or S3 based on configuration
     storage = get_storage_client()
-    storage.upload_to_bronze(data, source="pncp", date=datetime.now())
+    storage.upload_to_bronze(data, source="pncp", date=get_now_sao_paulo())
 """
 
 import os
@@ -18,6 +19,27 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
+
+# Import timezone utilities
+try:
+    from backend.app.core.datetime_utils import (
+        get_now_sao_paulo,
+        to_sao_paulo,
+        format_datetime,
+    )
+except ImportError:
+    # Fallback if datetime_utils not available (shouldn't happen)
+    def get_now_sao_paulo():
+        from datetime import timezone, timedelta
+
+        return datetime.now(timezone(timedelta(hours=-3)))
+
+    def to_sao_paulo(dt):
+        return dt if dt else get_now_sao_paulo()
+
+    def format_datetime(dt=None):
+        dt = dt or get_now_sao_paulo()
+        return dt.strftime("%Y%m%d_%H%M%S")
 
 
 class StorageClient(ABC):
@@ -309,8 +331,11 @@ class S3StorageClient(StorageClient):
         """Upload to S3 Bronze layer as Parquet (default) or JSON."""
         import io
 
+        # Ensure timezone-aware date in São Paulo timezone
         if date is None:
-            date = datetime.now()
+            date = get_now_sao_paulo()
+        else:
+            date = to_sao_paulo(date)
 
         # Convert to DataFrame if needed
         if isinstance(data, pd.DataFrame):
@@ -322,9 +347,9 @@ class S3StorageClient(StorageClient):
         else:
             raise ValueError(f"Unsupported data type: {type(data)}")
 
-        # Generate S3 key with Hive partitioning
+        # Generate S3 key with Hive partitioning (using São Paulo timezone)
         if filename is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = format_datetime(date)
             extension = "parquet" if format == "parquet" else "json"
             filename = f"{source}_{timestamp}.{extension}"
 
@@ -364,10 +389,13 @@ class S3StorageClient(StorageClient):
         """Upload to S3 Silver layer."""
         import io
 
+        # Ensure timezone-aware date in São Paulo timezone
         if date is None:
-            date = datetime.now()
+            date = get_now_sao_paulo()
+        else:
+            date = to_sao_paulo(date)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = format_datetime(date)
         s3_key = (
             f"{table}/year={date.year}/month={date.month:02d}/"
             f"day={date.day:02d}/{table}_{timestamp}.parquet"
@@ -392,10 +420,13 @@ class S3StorageClient(StorageClient):
         """Upload to S3 Gold layer."""
         import io
 
+        # Ensure timezone-aware date in São Paulo timezone
         if date is None:
-            date = datetime.now()
+            date = get_now_sao_paulo()
+        else:
+            date = to_sao_paulo(date)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = format_datetime(date)
         s3_key = (
             f"{feature_set}/year={date.year}/month={date.month:02d}/"
             f"day={date.day:02d}/{feature_set}_{timestamp}.parquet"

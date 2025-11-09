@@ -128,6 +128,10 @@ Examples:
         logging.getLogger().setLevel(logging.DEBUG)
         logging.getLogger("backend").setLevel(logging.DEBUG)
 
+    # Check if required services are available before starting
+    from backend.app.core.health_checks import check_services_or_exit
+    check_services_or_exit(["PostgreSQL", "Redis", "MinIO"], script_name="PNCP Details Ingestion")
+
     # Parse date
     try:
         execution_date = datetime.strptime(args.date, "%Y%m%d")

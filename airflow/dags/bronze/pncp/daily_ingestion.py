@@ -19,8 +19,9 @@ import sys
 
 sys.path.insert(0, "/opt/airflow")
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
+import pendulum
 from airflow import DAG
 
 # Airflow 3.x imports
@@ -37,6 +38,9 @@ from backend.app.services import (
     PNCPIngestionService,
     StateManager,
 )
+
+# Import centralized date utilities
+from dags.utils.dates import get_execution_date, DEFAULT_TZ
 
 # DAG default arguments
 default_args = {
@@ -60,11 +64,9 @@ def fetch_pncp_data(**context) -> dict:
     3. Saves data to temp storage (NOT XCom to avoid DB bloat)
     4. Pushes only S3 reference to XCom (<1KB)
     """
-    # Airflow 3.x: use logical_date instead of execution_date
-    # Fallback chain: logical_date -> data_interval_start -> current time
-    execution_date = (
-        context.get("logical_date") or context.get("data_interval_start") or datetime.now(UTC)
-    )
+    # Get execution date using centralized utility (handles timezone conversion)
+    execution_date = get_execution_date(context)
+
     dag_run = context.get("dag_run")
     execution_id = dag_run.run_id if dag_run else execution_date.strftime("%Y%m%d_%H%M%S")
 
@@ -358,7 +360,7 @@ with DAG(
     default_args=default_args,
     description="Daily ingestion of PNCP data to Bronze layer with incremental state management",
     schedule="0 2 * * *",  # Daily at 2 AM
-    start_date=datetime(2025, 10, 1, tzinfo=UTC),
+    start_date=pendulum.datetime(2025, 10, 1, tz=DEFAULT_TZ),
     catchup=False,
     max_active_runs=1,
     tags=["bronze", "pncp", "ingestion", "daily", "incremental"],

@@ -19,8 +19,9 @@ import sys
 
 sys.path.insert(0, "/opt/airflow")
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
+import pendulum
 from airflow import DAG
 
 # Airflow 3.x imports
@@ -32,6 +33,9 @@ except ImportError:
 # Import standalone services (no Airflow dependencies)
 from backend.app.core.storage_client import get_storage_client
 from backend.app.services.ingestion.pncp_details import PNCPDetailsIngestionService
+
+# Import centralized date utilities
+from dags.utils.dates import get_execution_date, DEFAULT_TZ
 
 # DAG default arguments
 default_args = {
@@ -58,12 +62,9 @@ def fetch_details_batch(**context) -> dict:
     3. Processes next batch (e.g., 100 contratacoes)
     4. Saves data to temp storage
     """
-    # Airflow 3.x uses 'logical_date' instead of 'execution_date'
-    execution_date = (
-        context.get("logical_date")
-        or context.get("data_interval_start")
-        or datetime.now(UTC)
-    )
+    # Get execution date using centralized utility (handles timezone conversion)
+    execution_date = get_execution_date(context)
+
     dag_run = context.get("dag_run")
     execution_id = (
         dag_run.run_id if dag_run else execution_date.strftime("%Y%m%d_%H%M%S")
@@ -137,7 +138,8 @@ def append_to_bronze(**context) -> dict:
     )
 
     task_instance = context["task_instance"]
-    execution_date = context.get("logical_date") or context.get("data_interval_start")
+    # Get execution date using centralized utility (handles timezone conversion)
+    execution_date = get_execution_date(context)
 
     # Get batch result
     batch_result = task_instance.xcom_pull(task_ids="fetch_details_batch")
@@ -224,10 +226,9 @@ def cleanup_temp_files(**context) -> dict:
     Airflow task wrapper: Cleanup temporary files from S3.
     """
     dag_run = context.get("dag_run")
+    execution_date = get_execution_date(context)
     execution_id = (
-        dag_run.run_id
-        if dag_run
-        else context.get("logical_date", datetime.now()).strftime("%Y%m%d_%H%M%S")
+        dag_run.run_id if dag_run else execution_date.strftime("%Y%m%d_%H%M%S")
     )
 
     storage = get_storage_client()
@@ -250,9 +251,9 @@ def cleanup_temp_files(**context) -> dict:
 with DAG(
     dag_id="bronze_pncp_details_hourly_ingestion",
     default_args=default_args,
-    description="Hourly batch processing of PNCP details with auto-resume",
-    schedule="0 * * * *",  # Every hour
-    start_date=datetime(2025, 10, 23, tzinfo=UTC),
+    description="Batch processing of PNCP details with auto-resume (every 15 minutes)",
+    schedule="*/15 * * * *",  # Every 15 minutes
+    start_date=pendulum.datetime(2025, 10, 23, tz=DEFAULT_TZ),
     catchup=False,
     max_active_runs=1,
     tags=["bronze", "pncp", "details", "hourly", "auto-resume"],

@@ -379,6 +379,10 @@ def main():
 
     args = parser.parse_args()
 
+    # Check if required services are available before starting
+    from backend.app.core.health_checks import check_services_or_exit
+    check_services_or_exit(["PostgreSQL", "Redis", "MinIO"], script_name="PNCP Ingestion")
+
     try:
         result = run_ingestion_pipeline(
             mode=args.mode,

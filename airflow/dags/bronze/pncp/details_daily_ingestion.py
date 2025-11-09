@@ -19,8 +19,9 @@ import sys
 
 sys.path.insert(0, "/opt/airflow")
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
+import pendulum
 from airflow import DAG
 
 # Airflow 3.x imports
@@ -33,6 +34,9 @@ except ImportError:
 from backend.app.core.storage_client import get_storage_client
 from backend.app.services import StateManager
 from backend.app.services.ingestion.pncp_details import PNCPDetailsIngestionService
+
+# Import centralized date utilities
+from dags.utils.dates import get_execution_date, DEFAULT_TZ
 
 # DAG default arguments
 default_args = {
@@ -59,16 +63,13 @@ def fetch_details_data(**context) -> dict:
     Features:
     - Auto-resume: Automatically skips already-processed contratacoes
     - Batch processing: Process N contratacoes per run (configurable)
-    - Incremental checkpoints: Saves every 50 contratacoes to prevent data loss
+    - Incremental chunks: Saves every 100 contratacoes to prevent data loss
     """
     from airflow.models import Variable
 
-    # Airflow 3.x uses 'logical_date' instead of 'execution_date'
-    execution_date = (
-        context.get("logical_date")
-        or context.get("data_interval_start")
-        or datetime.now(UTC)
-    )
+    # Get execution date using centralized utility (handles timezone conversion)
+    execution_date = get_execution_date(context)
+
     dag_run = context.get("dag_run")
     execution_id = (
         dag_run.run_id if dag_run else execution_date.strftime("%Y%m%d_%H%M%S")
@@ -78,14 +79,14 @@ def fetch_details_data(**context) -> dict:
     if dag_run and dag_run.conf:
         max_contratacoes = dag_run.conf.get("max_contratacoes")
         batch_size = dag_run.conf.get("batch_size")
-        checkpoint_every = dag_run.conf.get("checkpoint_every", 50)
+        checkpoint_every = dag_run.conf.get("checkpoint_every", 100)
     else:
         max_contratacoes = None
         # Get from Airflow Variables (set via UI or CLI)
         batch_size = Variable.get("pncp_details_batch_size", default_var=None)
         if batch_size:
             batch_size = int(batch_size)
-        checkpoint_every = int(Variable.get("pncp_details_checkpoint_every", default_var=50))
+        checkpoint_every = int(Variable.get("pncp_details_checkpoint_every", default_var=100))
 
     # Call standalone service (no Airflow dependencies)
     service = PNCPDetailsIngestionService()
@@ -106,16 +107,20 @@ def fetch_details_data(**context) -> dict:
         format="json",  # JSON for complex nested structure
     )
 
+    # Log ingestion summary (data is already saved in chunks)
+    metadata = result["metadata"]
     print(
-        f"📦 Saved {len(result['data'])} enriched contratacoes to temp storage: {temp_key} "
-        f"({result['metadata']['total_itens']} itens, {result['metadata']['total_arquivos']} arquivos)"
+        f"✅ Ingestion complete: {metadata['contratacoes_processed']} contratacoes processed "
+        f"({metadata['total_itens']} itens, {metadata['total_arquivos']} arquivos, "
+        f"{metadata.get('chunks_saved', 0)} chunks saved)"
     )
+    print(f"📦 Metadata saved to temp storage: {temp_key}")
 
     # ✅ XCom only stores lightweight metadata + S3 reference
     return {
         "temp_key": temp_key,  # S3 reference only (~100 bytes)
         "metadata": result["metadata"],
-        "contratacoes_count": len(result["data"]),
+        "contratacoes_count": metadata["contratacoes_processed"],
     }
 
 
@@ -411,7 +416,7 @@ with DAG(
     default_args=default_args,
     description="Fetch PNCP contratacao details (itens + arquivos) from Bronze contratacoes",
     schedule="0 4 * * *",  # Daily at 4 AM (after contratacoes at 2 AM)
-    start_date=datetime(2025, 10, 1, tzinfo=UTC),
+    start_date=pendulum.datetime(2025, 10, 1, tz=DEFAULT_TZ),
     catchup=False,
     max_active_runs=1,
     tags=["bronze", "pncp", "details", "daily"],

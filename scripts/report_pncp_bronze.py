@@ -210,15 +210,29 @@ def generate_report(
     # Calculate statistics
     total_records = len(combined_df)
 
-    # Unique licitações by sequencialCompra (processo licitatório)
-    # NOTE: Each licitação can have multiple items/modalidades (numeroControlePNCP)
-    # So total_records > unique_licitacoes is EXPECTED and NOT a duplicate issue
-    if "sequencialCompra" in combined_df.columns:
-        unique_licitacoes = combined_df["sequencialCompra"].nunique()
-        id_column = "sequencialCompra"
-    elif "numeroCompra" in combined_df.columns:
-        unique_licitacoes = combined_df["numeroCompra"].nunique()
-        id_column = "numeroCompra"
+    # Unique licitações by numeroControlePNCP (globally unique ID)
+    # NOTE: numeroControlePNCP = {CNPJ}-{unidade}-{sequencial}/{ano}
+    # This is the ONLY globally unique identifier in PNCP API
+    # sequencialCompra is NOT unique (each orgao has its own sequence)
+    if "numeroControlePNCP" in combined_df.columns:
+        unique_licitacoes = combined_df["numeroControlePNCP"].nunique()
+        id_column = "numeroControlePNCP"
+    elif "sequencialCompra" in combined_df.columns:
+        # Fallback: combine CNPJ + sequencialCompra for uniqueness
+        logger.warning(
+            "Using sequencialCompra (not globally unique). "
+            "Combining with CNPJ for accurate count."
+        )
+        combined_df["cnpj"] = combined_df["orgaoEntidade"].apply(
+            lambda x: x.get("cnpj") if isinstance(x, dict) else None
+        )
+        combined_df["licitacao_id"] = (
+            combined_df["cnpj"].astype(str)
+            + "-"
+            + combined_df["sequencialCompra"].astype(str)
+        )
+        unique_licitacoes = combined_df["licitacao_id"].nunique()
+        id_column = "licitacao_id"
     else:
         unique_licitacoes = total_records
         id_column = None
@@ -390,6 +404,10 @@ Examples:
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(message)s",
         )
+
+    # Check if required services are available before starting
+    from backend.app.core.health_checks import check_services_or_exit
+    check_services_or_exit(["MinIO"], script_name="PNCP Bronze Report")
 
     # Parse dates
     start_date = None

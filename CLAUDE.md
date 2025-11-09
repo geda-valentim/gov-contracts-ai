@@ -181,6 +181,40 @@ make setup   # First-time setup
 - MinIO Console: `http://localhost:9001` (credentials: minioadmin/minioadmin)
 - MinIO API: `http://minio:9000`
 
+**Service Health Checks:**
+
+All scripts automatically detect and connect to running Docker services without attempting to restart them. This prevents:
+- ❌ Port conflicts from duplicate service instances
+- ❌ Unnecessary restarts
+- ❌ Loss of cached data (Redis)
+- ❌ Confusing error messages
+
+Health check features:
+```python
+# All scripts use health checks (backend/app/core/health_checks.py)
+from backend.app.core.health_checks import ensure_services_available
+
+# Automatically verify services before execution
+ensure_services_available(services=["PostgreSQL", "Redis", "MinIO"])
+```
+
+Scripts with automatic health checks:
+- ✅ `scripts/run_pncp_ingestion.py` - Checks PostgreSQL, Redis, MinIO
+- ✅ `scripts/run_pncp_details_ingestion.py` - Checks PostgreSQL, Redis, MinIO
+- ✅ `scripts/report_pncp_bronze.py` - Checks MinIO
+- ✅ `scripts/report_pncp_details.py` - Checks MinIO
+- ✅ `scripts/test_cnpj_ingestion.py` - Checks MinIO
+
+If services are not running, scripts will:
+1. 🔍 Display which services are missing
+2. 💡 Show helpful command: `docker compose up -d`
+3. 🛑 Exit gracefully with error code 1
+
+This approach supports mixed environments:
+- **Docker containers**: Scripts detect services via Docker network
+- **Local development**: Scripts connect to localhost:exposed_ports
+- **Remote services**: Scripts use explicit .env configuration
+
 **Terraform:**
 ```bash
 cd infrastructure/terraform
@@ -220,6 +254,12 @@ terraform destroy -var-file=environments/dev/terraform.tfvars
 
 **Data Lake Structure (S3):**
 - `bronze/` - Raw data partitioned by date
+  - `pncp/` - Contratações (single file per day: `data.parquet`)
+  - `pncp_details/` - Details chunked (multiple files per day)
+    - **Chunking strategy**: `chunk_0001.parquet`, `chunk_0002.parquet`, etc.
+    - **Chunk size**: ~100 contratações per chunk (~15-20 MB each)
+    - **Purpose**: Prevent OOM during ingestion (95% memory reduction)
+    - **State tracking**: Incremental state saved with each chunk
 - `silver/` - Cleaned and validated data
 - `gold/` - Feature engineered datasets
 
@@ -402,21 +442,108 @@ python src/data/validation.py --suite bronze_validation
 
 ### Environment Variables
 
-**Backend** (`.env` pattern):
-```
-DATABASE_URL=postgresql://...
-REDIS_URL=redis://...
-ANTHROPIC_API_KEY=...
-OPENAI_API_KEY=...
-PINECONE_API_KEY=...
-MLFLOW_TRACKING_URI=...
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-SENTRY_DSN=...
+**Centralized Configuration:** All services use a single `.env` file at the project root.
+
+```bash
+# Initial setup
+cp .env.example .env
+vim .env  # Customize for your environment
 ```
 
-**Frontend** (`.env.local` pattern):
+**Key Features:**
+- ✅ Single source of truth for all configuration
+- ✅ Auto-detects Docker vs localhost environment
+- ✅ Supports hybrid deployments (Docker + remote services)
+- ✅ No duplicate .env files in subdirectories
+
+**Service Connection Priority:**
+1. Environment variable from `.env`
+2. Docker service name (if running in Docker)
+3. localhost fallback
+
+**Example Configurations:**
+
+**Local Development (Docker):**
+```bash
+# Services use Docker internal networking
+POSTGRES_SERVER=postgres
+POSTGRES_PORT=5432
+REDIS_HOST=redis
+REDIS_PORT=6379
+MINIO_ENDPOINT_URL=http://minio:9000
+OPENSEARCH_HOST=opensearch
+OPENSEARCH_PORT=9200
 ```
+
+**Local Development (Host Scripts):**
+```bash
+# Scripts connect to Docker-exposed ports
+POSTGRES_SERVER=localhost
+POSTGRES_PORT=5433
+REDIS_HOST=localhost
+REDIS_PORT=6380
+MINIO_ENDPOINT_URL=http://localhost:9000
+OPENSEARCH_HOST=localhost
+OPENSEARCH_PORT=9201
+```
+
+**Remote/Production:**
+```bash
+# Use external service hostnames
+POSTGRES_SERVER=db.example.com
+POSTGRES_PORT=5432
+REDIS_HOST=redis.example.com
+REDIS_PORT=6379
+MINIO_ENDPOINT_URL=http://s3.example.com:9000
+OPENSEARCH_HOST=search.example.com
+OPENSEARCH_PORT=9200
+```
+
+**Required Variables:**
+```bash
+# Database
+POSTGRES_SERVER=localhost
+POSTGRES_PORT=5433
+POSTGRES_USER=admin
+POSTGRES_PASSWORD=dev123
+POSTGRES_DB=govcontracts
+
+# Redis
+REDIS_HOST=localhost
+REDIS_PORT=6380
+
+# MinIO
+MINIO_ENDPOINT_URL=http://localhost:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin
+BUCKET_BRONZE=govcontracts-bronze
+BUCKET_SILVER=govcontracts-silver
+BUCKET_GOLD=govcontracts-gold
+
+# OpenSearch
+OPENSEARCH_HOST=localhost
+OPENSEARCH_PORT=9201
+
+# API Keys
+ANTHROPIC_API_KEY=your_key_here
+OPENAI_API_KEY=your_key_here
+```
+
+**How It Works:**
+
+The `backend/app/core/config.py` automatically detects your environment:
+- **Docker containers**: Uses service names (postgres, redis, minio)
+- **Host machine**: Uses localhost with external ports
+- **Custom**: Override with explicit `.env` values
+
+All Docker Compose services load from root `.env` file. Scripts automatically load from root `.env` using:
+```python
+dotenv_path = Path(__file__).parent.parent / ".env"
+load_dotenv(dotenv_path)
+```
+
+**Frontend** (`.env.local` - separate file):
+```bash
 NEXT_PUBLIC_API_URL=http://localhost:8000
 NEXT_PUBLIC_ENV=development
 ```

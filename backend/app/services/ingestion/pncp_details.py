@@ -114,7 +114,11 @@ def convert_nested_to_dataframe(contratacoes: List[Dict]) -> pd.DataFrame:
 
 
 def save_to_parquet_bronze(
-    df: pd.DataFrame, storage_client, execution_date: datetime, mode: str = "overwrite"
+    df: pd.DataFrame,
+    storage_client,
+    execution_date: datetime,
+    mode: str = "overwrite",
+    chunk_num: Optional[int] = None,
 ) -> str:
     """
     Save details DataFrame to Bronze in Parquet format.
@@ -123,7 +127,8 @@ def save_to_parquet_bronze(
         df: DataFrame with details
         storage_client: Storage client (MinIO/S3)
         execution_date: Date for partitioning
-        mode: 'overwrite' or 'append'
+        mode: 'overwrite' or 'append' (deprecated, use chunk_num for multiple files)
+        chunk_num: Optional chunk number for multi-file storage
 
     Returns:
         S3 key where data was saved
@@ -134,9 +139,16 @@ def save_to_parquet_bronze(
     month = execution_date.month
     day = execution_date.day
 
-    s3_key = f"pncp_details/year={year}/month={month:02d}/day={day:02d}/details.parquet"
+    # Determine filename based on chunk_num
+    if chunk_num is not None:
+        filename = f"chunk_{chunk_num:04d}.parquet"
+    else:
+        filename = "details.parquet"
 
-    if mode == "append":
+    s3_key = f"pncp_details/year={year}/month={month:02d}/day={day:02d}/{filename}"
+
+    # DEPRECATED: append mode (kept for backward compatibility)
+    if mode == "append" and chunk_num is None:
         # Read existing file if it exists
         try:
             # Access underlying client
@@ -213,7 +225,7 @@ class PNCPDetailsIngestionService:
         max_contratacoes: Optional[int] = None,
         batch_size: Optional[int] = None,
         auto_resume: bool = False,
-        checkpoint_every: int = 50,
+        checkpoint_every: int = 100,
     ) -> Dict:
         """
         Fetch details (items + arquivos) for all contratacoes from a specific date.
@@ -223,7 +235,7 @@ class PNCPDetailsIngestionService:
             max_contratacoes: Optional limit for testing (default: all)
             batch_size: Number of contratacoes to process per execution (auto-resume mode)
             auto_resume: If True, automatically resume from last checkpoint
-            checkpoint_every: Save to Bronze every N contratacoes (default: 50)
+            checkpoint_every: Save to Bronze every N contratacoes (default: 100)
 
         Returns:
             Dict with:
@@ -330,13 +342,13 @@ class PNCPDetailsIngestionService:
             print("♻️  Auto-resume: ENABLED")
         print(f"{'='*70}\n")
 
-        # 2. Fetch details for each contratacao with incremental checkpoints
-        enriched_contratacoes = []
+        # 2. Fetch details for each contratacao with chunking
+        chunk_buffer = []  # ✅ Buffer for current chunk only
         total_itens = 0
         total_arquivos = 0
         api_calls = 0
         errors = 0
-        checkpoints_saved = 0
+        chunks_saved = 0
 
         for idx, contratacao in enumerate(contratacoes, 1):
             try:
@@ -348,18 +360,20 @@ class PNCPDetailsIngestionService:
                 total_arquivos += stats["arquivos_count"]
                 api_calls += stats["api_calls"]
 
-                enriched_contratacoes.append(enriched)
+                chunk_buffer.append(enriched)
 
-                # 🔄 CHECKPOINT: Save incrementally every N contratacoes
+                # 🔄 CHECKPOINT: Save chunk and clear buffer every N contratacoes
                 if idx % checkpoint_every == 0:
-                    self._save_checkpoint(
-                        enriched_contratacoes,
-                        execution_date,
-                        checkpoint_num=idx // checkpoint_every,
+                    chunks_saved += 1
+                    self._save_chunk(
+                        chunk_data=chunk_buffer,
+                        execution_date=execution_date,
+                        chunk_num=chunks_saved,
+                        auto_resume=auto_resume,
                     )
-                    checkpoints_saved += 1
+
                     checkpoint_msg = (
-                        f"💾 Checkpoint {checkpoints_saved}: Saved {len(enriched_contratacoes)} contratacoes "
+                        f"💾 Chunk {chunks_saved}: Saved {len(chunk_buffer)} contratacoes "
                         f"({idx}/{len(contratacoes)} total progress, "
                         f"{total_itens} itens, {total_arquivos} arquivos)"
                     )
@@ -369,7 +383,10 @@ class PNCPDetailsIngestionService:
                     print(checkpoint_msg)
                     print(f"{'='*70}\n")
 
-                # Log progress every 100 contratacoes
+                    # ✅ CLEAR BUFFER - Free memory
+                    chunk_buffer = []
+
+                # Log progress every 100 contratacoes (if checkpoint_every > 100)
                 elif idx % 100 == 0:
                     progress_msg = (
                         f"Progress: {idx}/{len(contratacoes)} contratacoes, "
@@ -385,7 +402,7 @@ class PNCPDetailsIngestionService:
                 )
                 errors += 1
                 # Still add contratacao without details
-                enriched_contratacoes.append(
+                chunk_buffer.append(
                     {
                         **contratacao,
                         "itens": [],
@@ -399,21 +416,24 @@ class PNCPDetailsIngestionService:
                     }
                 )
 
-        # 🔄 FINAL CHECKPOINT: Save any remaining contratacoes
-        if len(enriched_contratacoes) % checkpoint_every != 0:
-            self._save_checkpoint(
-                enriched_contratacoes,
-                execution_date,
-                checkpoint_num=checkpoints_saved + 1,
+        # 🔄 FINAL CHUNK: Save any remaining contratacoes
+        if chunk_buffer:
+            chunks_saved += 1
+            self._save_chunk(
+                chunk_data=chunk_buffer,
+                execution_date=execution_date,
+                chunk_num=chunks_saved,
+                auto_resume=auto_resume,
             )
-            checkpoints_saved += 1
-            remaining = len(enriched_contratacoes) % checkpoint_every
-            final_msg = f"💾 Final checkpoint: Saved remaining {remaining} contratacoes"
+            final_msg = f"💾 Final chunk {chunks_saved}: Saved remaining {len(chunk_buffer)} contratacoes"
             logger.info(final_msg)
             # Print for Airflow UI visibility
             print(f"\n{'='*70}")
             print(final_msg)
             print(f"{'='*70}\n")
+
+        # ✅ State is now saved incrementally in _save_chunk()
+        # No need for final state update here
 
         # Print completion summary for Airflow UI
         print(f"\n{'='*70}")
@@ -424,18 +444,14 @@ class PNCPDetailsIngestionService:
         print(f"📄 Total arquivos: {total_arquivos}")
         print(f"🌐 API calls: {api_calls}")
         print(f"❌ Errors: {errors}")
-        print(f"💾 Checkpoints saved: {checkpoints_saved}")
+        print(f"💾 Chunks saved: {chunks_saved}")
         print(f"{'='*70}\n")
 
         logger.info(
             f"✅ Processed {len(contratacoes)} contratacoes: "
             f"{total_itens} itens, {total_arquivos} arquivos "
-            f"({api_calls} API calls, {errors} errors, {checkpoints_saved} checkpoints saved)"
+            f"({api_calls} API calls, {errors} errors, {chunks_saved} chunks saved)"
         )
-
-        # Sanitize data for JSON serialization (only return last batch for XCom)
-        logger.debug("Sanitizing data for JSON serialization...")
-        enriched_contratacoes_sanitized = sanitize_for_json(enriched_contratacoes)
 
         # Calculate remaining contratacoes for auto-resume
         remaining_contratacoes = 0
@@ -446,8 +462,9 @@ class PNCPDetailsIngestionService:
                     f"📋 Remaining: {remaining_contratacoes} contratacoes to process in future runs"
                 )
 
+        # ✅ Return only metadata (data already saved in chunks)
         return {
-            "data": enriched_contratacoes_sanitized,
+            "data": [],  # Empty - data saved incrementally in chunks
             "metadata": {
                 "execution_date": execution_date.isoformat(),
                 "contratacoes_processed": len(contratacoes),
@@ -455,6 +472,7 @@ class PNCPDetailsIngestionService:
                 "total_arquivos": total_arquivos,
                 "api_calls": api_calls,
                 "errors": errors,
+                "chunks_saved": chunks_saved,
                 "ingestion_timestamp": datetime.now().isoformat(),
                 "remaining_contratacoes": remaining_contratacoes
                 if auto_resume
@@ -620,44 +638,88 @@ class PNCPDetailsIngestionService:
 
         return enriched, stats
 
-    def _save_checkpoint(
+    def _save_chunk(
         self,
-        enriched_contratacoes: List[Dict],
+        chunk_data: List[Dict],
         execution_date: datetime,
-        checkpoint_num: int,
+        chunk_num: int,
+        auto_resume: bool,
     ) -> None:
         """
-        Save checkpoint to Bronze layer (append mode).
+        Save chunk to Bronze layer as separate Parquet file and update state.
 
         Args:
-            enriched_contratacoes: All contratacoes processed so far
+            chunk_data: Contratacoes in current chunk (not cumulative)
             execution_date: Date for partitioning
-            checkpoint_num: Checkpoint number (for logging)
+            chunk_num: Chunk number (for filename)
+            auto_resume: Whether to update state tracking
         """
         try:
-            # Convert to DataFrame
-            df = convert_nested_to_dataframe(enriched_contratacoes)
+            # 1. Convert to DataFrame
+            df = convert_nested_to_dataframe(chunk_data)
 
-            # Save to Bronze in APPEND mode
+            # 2. Save to Bronze as separate chunk file
             s3_key = save_to_parquet_bronze(
                 df=df,
                 storage_client=self.storage_client,
                 execution_date=execution_date,
-                mode="append",
+                mode="overwrite",  # Each chunk is independent
+                chunk_num=chunk_num,  # Pass chunk number for filename
             )
 
             logger.debug(
-                f"Checkpoint {checkpoint_num} saved to {s3_key} ({len(df)} contratacoes)"
+                f"Chunk {chunk_num} saved to {s3_key} ({len(df)} contratacoes)"
             )
 
-            # Print checkpoint save confirmation for Airflow UI
+            # Print chunk save confirmation for Airflow UI
             print(f"   ✓ Saved to Bronze: {s3_key}")
 
+            # 3. Update state incrementally (if auto-resume enabled)
+            if auto_resume:
+                from backend.app.services import StateManager
+
+                state_manager = StateManager()
+
+                # Extract keys from chunk
+                chunk_keys = []
+                for c in chunk_data:
+                    key = self.extract_key_from_contratacao(c)
+                    if key:
+                        chunk_keys.append(key)
+
+                # Update itens state
+                state_manager.update_details_state(
+                    source="pncp_details",
+                    date=execution_date,
+                    detail_type="itens",
+                    new_keys=chunk_keys,
+                    execution_metadata={
+                        "chunk_num": chunk_num,
+                        "contratacoes_in_chunk": len(chunk_data),
+                    },
+                )
+
+                # Update arquivos state (same keys)
+                state_manager.update_details_state(
+                    source="pncp_details",
+                    date=execution_date,
+                    detail_type="arquivos",
+                    new_keys=chunk_keys,
+                    execution_metadata={
+                        "chunk_num": chunk_num,
+                        "contratacoes_in_chunk": len(chunk_data),
+                    },
+                )
+
+                logger.debug(
+                    f"State updated: {len(chunk_keys)} keys from chunk {chunk_num}"
+                )
+
         except Exception as e:
-            error_msg = f"⚠️  Failed to save checkpoint {checkpoint_num}: {e}"
+            error_msg = f"⚠️  Failed to save chunk {chunk_num}: {e}"
             logger.error(error_msg, exc_info=True)
             print(error_msg)
-            # Don't raise - checkpoint failure shouldn't stop processing
+            # Don't raise - chunk failure shouldn't stop processing
 
     @staticmethod
     def build_composite_key(cnpj: str, ano: int, sequencial: int) -> str:

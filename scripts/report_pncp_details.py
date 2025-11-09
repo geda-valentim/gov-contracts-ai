@@ -51,27 +51,73 @@ logger = logging.getLogger(__name__)
 
 
 def read_details_for_date(storage, date: datetime) -> list:
-    """Read details data from Bronze for a specific date."""
+    """
+    Read details data from Bronze for a specific date.
+
+    Supports both:
+    - Legacy format: details.parquet (single file)
+    - Chunked format: chunk_0001.parquet, chunk_0002.parquet, etc.
+    """
+    import pandas as pd
+
     year = date.year
     month = date.month
     day = date.day
 
-    details_key = f"pncp_details/year={year}/month={month:02d}/day={day:02d}/details.parquet"
+    partition_prefix = f"pncp_details/year={year}/month={month:02d}/day={day:02d}/"
 
     try:
-        # Read Parquet file
-        df = storage._client.read_parquet_from_s3(
-            bucket_name=storage.BUCKET_BRONZE, object_name=details_key
+        # List all Parquet files in partition
+        objects = storage.list_objects(
+            bucket=storage.BUCKET_BRONZE,
+            prefix=partition_prefix,
         )
 
-        # Convert to list of dicts
-        data = df.to_dict(orient="records")
+        # Filter for Parquet files only
+        parquet_files = [
+            obj["Key"] for obj in objects
+            if obj["Key"].endswith(".parquet")
+        ]
 
-        logger.debug(f"Loaded {len(data)} contratacoes from {date.date()}")
-        return data
+        if not parquet_files:
+            logger.debug(f"No parquet files found for {date.date()}")
+            return []
+
+        logger.debug(f"Found {len(parquet_files)} parquet file(s) for {date.date()}")
+
+        # Read all Parquet files and concatenate
+        dfs = []
+        for file_key in parquet_files:
+            df = storage._client.read_parquet_from_s3(
+                bucket_name=storage.BUCKET_BRONZE,
+                object_name=file_key
+            )
+            dfs.append(df)
+
+        # Concatenate all DataFrames
+        if dfs:
+            combined_df = pd.concat(dfs, ignore_index=True)
+
+            # Deduplicate by numeroControlePNCP (chunks may overlap in edge cases)
+            if "numeroControlePNCP" in combined_df.columns:
+                before = len(combined_df)
+                combined_df = combined_df.drop_duplicates(
+                    subset=["numeroControlePNCP"], keep="first"
+                )
+                after = len(combined_df)
+                if before != after:
+                    logger.debug(f"Removed {before - after} duplicates")
+
+            # Convert to list of dicts
+            data = combined_df.to_dict(orient="records")
+
+            logger.debug(f"Loaded {len(data)} contratacoes from {date.date()}")
+            return data
+        else:
+            return []
 
     except Exception as e:
-        logger.debug(f"No data found for {date.date()}: {e}")
+        logger.debug(f"Error reading data for {date.date()}: {e}")
         return []
 
 
@@ -256,6 +302,10 @@ def main():
     # Set logging level
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+
+    # Check if required services are available before starting
+    from backend.app.core.health_checks import check_services_or_exit
+    check_services_or_exit(["MinIO"], script_name="PNCP Details Report")
 
     # Parse dates
     try:
