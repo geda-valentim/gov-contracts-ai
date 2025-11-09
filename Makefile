@@ -2,7 +2,7 @@
 .PHONY: help setup up down logs test test-cov test-html lint format clean backend-shell
 .PHONY: airflow-ui airflow-logs airflow-list-dags airflow-bash
 .PHONY: airflow-test-hourly airflow-trigger-hourly airflow-test-daily airflow-trigger-daily
-.PHONY: check-minio check-services up-smart
+.PHONY: check-minio check-services up-smart fix-minio-network init-buckets
 
 help:
 	@echo "Gov Contracts AI - Available commands:"
@@ -14,8 +14,10 @@ help:
 	@echo "  make up-dev     - Start all services + dev tools (Adminer, RedisInsight)"
 	@echo "  make down       - Stop all services"
 	@echo "  make logs       - View logs"
-	@echo "  make check-services - Check all services availability"
-	@echo "  make check-minio    - Check if MinIO is available"
+	@echo "  make check-services    - Check all services availability"
+	@echo "  make check-minio       - Check if MinIO is available"
+	@echo "  make init-buckets      - Initialize MinIO buckets (works with local or shared MinIO)"
+	@echo "  make fix-minio-network - Fix Airflow-MinIO network connectivity (for shared-minio)"
 	@echo ""
 	@echo "🧪 Testing:"
 	@echo "  make test       - Run tests"
@@ -94,6 +96,86 @@ check-minio:
 	else \
 		echo "❌ MinIO not available at $$ENDPOINT"; \
 	fi
+
+fix-minio-network:
+	@echo "🔧 Fixing Airflow-MinIO network connectivity..."
+	@echo ""
+	@# Check if shared-minio exists
+	@if ! docker ps --format '{{.Names}}' | grep -q "^shared-minio$$"; then \
+		echo "⚠️  shared-minio container not found. Skipping network fix."; \
+		echo "   If you want to use the local MinIO, run: make up-smart"; \
+		exit 0; \
+	fi
+	@# Check if shared-dev-network exists
+	@if ! docker network ls --format '{{.Name}}' | grep -q "^shared-dev-network$$"; then \
+		echo "❌ shared-dev-network not found. Creating it..."; \
+		docker network create shared-dev-network; \
+	fi
+	@# Ensure shared-minio has 'minio' alias in shared-dev-network
+	@echo "🔗 Configuring MinIO network alias..."
+	@docker network disconnect shared-dev-network shared-minio 2>/dev/null || true
+	@docker network connect --alias minio shared-dev-network shared-minio
+	@echo "✅ MinIO configured with alias 'minio'"
+	@echo ""
+	@# Connect Airflow services to shared-dev-network
+	@echo "🔗 Connecting Airflow services to shared-dev-network..."
+	@for service in airflow-worker airflow-scheduler airflow-dag-processor airflow-webserver airflow-triggerer; do \
+		if docker ps --format '{{.Names}}' | grep -q "govcontracts-$$service"; then \
+			if docker inspect govcontracts-$$service --format '{{range $$key, $$value := .NetworkSettings.Networks}}{{$$key}} {{end}}' | grep -q "shared-dev-network"; then \
+				echo "  ✅ govcontracts-$$service already connected"; \
+			else \
+				docker network connect shared-dev-network govcontracts-$$service 2>/dev/null && \
+					echo "  ✅ Connected govcontracts-$$service" || \
+					echo "  ⚠️  Could not connect govcontracts-$$service"; \
+			fi; \
+		fi; \
+	done
+	@echo ""
+	@echo "🧪 Testing connectivity..."
+	@docker exec govcontracts-airflow-worker curl -sf http://minio:9000/minio/health/live >/dev/null && \
+		echo "✅ Airflow can reach MinIO!" || \
+		echo "❌ Airflow cannot reach MinIO. Check docker logs."
+	@echo ""
+	@echo "✅ Network fix complete!"
+
+init-buckets:
+	@echo "🪣 Initializing MinIO buckets..."
+	@echo ""
+	@# Check if MinIO is available
+	@ENDPOINT=$$(grep "^MINIO_ENDPOINT=" .env 2>/dev/null | cut -d= -f2 || echo "localhost:9000"); \
+	HOST=$$(echo $$ENDPOINT | cut -d: -f1); \
+	PORT=$$(echo $$ENDPOINT | cut -d: -f2); \
+	if ! nc -z -w2 $$HOST $$PORT 2>/dev/null; then \
+		echo "❌ MinIO not available at $$ENDPOINT"; \
+		echo "   Run 'make up-smart' first to start services."; \
+		exit 1; \
+	fi; \
+	echo "✅ MinIO is available at $$ENDPOINT"
+	@echo ""
+	@# Determine which network to use
+	@NETWORK=""; \
+	if docker ps --format '{{.Names}}' | grep -q "^shared-minio$$"; then \
+		echo "📡 Detected shared-minio - using shared-dev-network"; \
+		NETWORK="shared-dev-network"; \
+	elif docker ps --format '{{.Names}}' | grep -q "^govcontracts-minio$$"; then \
+		echo "📡 Detected local MinIO - using govcontracts-network"; \
+		NETWORK="gov-contracts-ai_govcontracts-network"; \
+	else \
+		echo "❌ No MinIO container found"; \
+		exit 1; \
+	fi; \
+	\
+	echo "🚀 Running bucket initialization script..."; \
+	echo ""; \
+	docker run --rm \
+		--network $$NETWORK \
+		--env-file .env \
+		-v $$(pwd)/infrastructure/docker/minio/init-buckets.sh:/init-buckets.sh:ro \
+		--entrypoint /bin/sh \
+		minio/mc:latest \
+		/init-buckets.sh
+	@echo ""
+	@echo "✅ Bucket initialization complete!"
 
 # Smart startup - checks all services
 up-smart:
@@ -186,6 +268,14 @@ up-smart:
 	@if nc -z -w2 localhost 8081 2>/dev/null; then echo "  - Airflow: http://localhost:8081"; fi
 	@if nc -z -w2 localhost 9201 2>/dev/null; then echo "  - OpenSearch: http://localhost:9201"; fi
 	@if nc -z -w2 localhost 5602 2>/dev/null; then echo "  - OpenSearch Dashboards: http://localhost:5602"; fi
+	@echo ""
+	@echo "🪣 Checking MinIO buckets..."
+	@if ./scripts/check-buckets.sh 2>/dev/null; then \
+		echo "  ✅ All buckets already exist"; \
+	else \
+		echo "  🔧 Initializing missing buckets..."; \
+		$(MAKE) init-buckets > /dev/null 2>&1 && echo "  ✅ Buckets initialized!" || echo "  ⚠️  Failed to initialize buckets (run 'make init-buckets' manually)"; \
+	fi
 
 setup:
 	@echo "Setting up Gov Contracts AI..."

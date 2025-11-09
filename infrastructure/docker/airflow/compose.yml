@@ -64,6 +64,7 @@ services:
     networks:
       govcontracts-network:
         ipv4_address: 172.30.0.20
+      shared-dev-network:
 
   airflow-scheduler:
     build:
@@ -89,6 +90,7 @@ services:
     networks:
       govcontracts-network:
         ipv4_address: 172.30.0.21
+      shared-dev-network:
 
   airflow-dag-processor:
     build:
@@ -114,6 +116,7 @@ services:
     networks:
       govcontracts-network:
         ipv4_address: 172.30.0.24
+      shared-dev-network:
 
   airflow-worker:
     build:
@@ -139,6 +142,7 @@ services:
     networks:
       govcontracts-network:
         ipv4_address: 172.30.0.22
+      shared-dev-network:
 
   airflow-triggerer:
     build:
@@ -162,6 +166,7 @@ services:
     networks:
       govcontracts-network:
         ipv4_address: 172.30.0.23
+      shared-dev-network:
 
   airflow-init:
     build:
@@ -202,3 +207,7 @@ services:
         condition: service_healthy
     networks:
       - govcontracts-network
+
+networks:
+  shared-dev-network:
+    external: true

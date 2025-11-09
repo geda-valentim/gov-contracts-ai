@@ -66,6 +66,38 @@ The Dockerfile uses:
 - `apt-get clean` to remove package cache
 - Multi-stage pattern could be added for further optimization
 
+## Network Configuration
+
+### Using Shared MinIO Instance
+
+If you're using a shared MinIO instance (e.g., `shared-minio` container) instead of the project's local MinIO:
+
+1. **Automatic Fix**: Run the network fix command:
+   ```bash
+   make fix-minio-network
+   ```
+
+2. **Manual Configuration**:
+   - The Airflow services need to connect to the `shared-dev-network`
+   - The shared MinIO container must have the alias `minio` in that network
+   - This is already configured in [compose.yml](compose.yml)
+
+3. **Verification**:
+   ```bash
+   # Test connectivity from Airflow worker
+   docker exec govcontracts-airflow-worker curl -f http://minio:9000/minio/health/live
+   ```
+
+**How it works:**
+- Airflow containers connect to both `govcontracts-network` and `shared-dev-network`
+- The shared MinIO is accessible via the alias `minio` in `shared-dev-network`
+- The `MINIO_ENDPOINT_URL` environment variable is set to `http://minio:9000`
+
+**Troubleshooting:**
+- If DAGs fail with `ConnectionRefusedError` to MinIO, run `make fix-minio-network`
+- Check if shared-minio is running: `docker ps | grep minio`
+- Verify network connectivity: `docker network inspect shared-dev-network`
+
 ## Security Considerations
 
 - Base image is from official Apache Airflow repository
