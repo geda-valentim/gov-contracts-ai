@@ -90,6 +90,31 @@ services:
       govcontracts-network:
         ipv4_address: 172.30.0.21
 
+  airflow-dag-processor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: govcontracts-airflow:latest
+    container_name: govcontracts-airflow-dag-processor
+    env_file:
+      - ../../../.env
+    command: dag-processor
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    volumes: *airflow-volumes
+    user: "50000:0"
+    depends_on: *airflow-depends-on
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type DagProcessorJob --hostname \"$${HOSTNAME}\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      govcontracts-network:
+        ipv4_address: 172.30.0.24
+
   airflow-worker:
     build:
       context: .

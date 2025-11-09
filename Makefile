@@ -2,6 +2,7 @@
 .PHONY: help setup up down logs test test-cov test-html lint format clean backend-shell
 .PHONY: airflow-ui airflow-logs airflow-list-dags airflow-bash
 .PHONY: airflow-test-hourly airflow-trigger-hourly airflow-test-daily airflow-trigger-daily
+.PHONY: check-minio check-services up-smart
 
 help:
 	@echo "Gov Contracts AI - Available commands:"
@@ -9,9 +10,12 @@ help:
 	@echo "🐳 Docker Services:"
 	@echo "  make setup      - First time setup"
 	@echo "  make up         - Start all services"
+	@echo "  make up-smart   - Smart startup (checks MinIO availability first)"
 	@echo "  make up-dev     - Start all services + dev tools (Adminer, RedisInsight)"
 	@echo "  make down       - Stop all services"
 	@echo "  make logs       - View logs"
+	@echo "  make check-services - Check all services availability"
+	@echo "  make check-minio    - Check if MinIO is available"
 	@echo ""
 	@echo "🧪 Testing:"
 	@echo "  make test       - Run tests"
@@ -47,9 +51,154 @@ help:
 	@echo "  make backend-shell - Open Poetry shell"
 	@echo "  make clean         - Clean up containers and caches"
 
+# Check all services availability
+check-services:
+	@echo "🔍 Checking services availability..."
+	@echo ""
+	@echo "MinIO:"
+	@ENDPOINT=$$(grep "^MINIO_ENDPOINT=" .env 2>/dev/null | cut -d= -f2 || echo "localhost:9000"); \
+	HOST=$$(echo $$ENDPOINT | cut -d: -f1); \
+	PORT=$$(echo $$ENDPOINT | cut -d: -f2); \
+	if nc -z -w2 $$HOST $$PORT 2>/dev/null; then \
+		echo "  ✅ Available at $$ENDPOINT"; \
+	else \
+		echo "  ❌ Not available at $$ENDPOINT"; \
+	fi
+	@echo ""
+	@echo "PostgreSQL:"
+	@PG_URL=$$(grep "^DATABASE_URL=" .env 2>/dev/null | cut -d= -f2 || echo "postgresql://admin:dev123@localhost:5433/govcontracts"); \
+	PG_PORT=$$(echo $$PG_URL | grep -oP ':\d+/' | tr -d ':/' || echo "5433"); \
+	if nc -z -w2 localhost $$PG_PORT 2>/dev/null; then \
+		echo "  ✅ Available at localhost:$$PG_PORT"; \
+	else \
+		echo "  ❌ Not available at localhost:$$PG_PORT"; \
+	fi
+	@echo ""
+	@echo "Redis:"
+	@REDIS_URL=$$(grep "^REDIS_URL=" .env 2>/dev/null | cut -d= -f2 || echo "redis://localhost:6380"); \
+	REDIS_PORT=$$(echo $$REDIS_URL | grep -oP ':\d+' | tail -1 | tr -d ':' || echo "6380"); \
+	if nc -z -w2 localhost $$REDIS_PORT 2>/dev/null; then \
+		echo "  ✅ Available at localhost:$$REDIS_PORT"; \
+	else \
+		echo "  ❌ Not available at localhost:$$REDIS_PORT"; \
+	fi
+
+check-minio:
+	@echo "🔍 Checking MinIO availability..."
+	@ENDPOINT=$$(grep "^MINIO_ENDPOINT=" .env 2>/dev/null | cut -d= -f2 || echo "localhost:9000"); \
+	HOST=$$(echo $$ENDPOINT | cut -d: -f1); \
+	PORT=$$(echo $$ENDPOINT | cut -d: -f2); \
+	echo "Testing $$HOST:$$PORT..."; \
+	if nc -z -w2 $$HOST $$PORT 2>/dev/null; then \
+		echo "✅ MinIO is available at $$ENDPOINT"; \
+	else \
+		echo "❌ MinIO not available at $$ENDPOINT"; \
+	fi
+
+# Smart startup - checks all services
+up-smart:
+	@echo "🚀 Smart startup - checking dependencies..."
+	@echo ""
+	@# Check PostgreSQL
+	@PG_URL=$$(grep "^DATABASE_URL=" .env 2>/dev/null | cut -d= -f2 || echo "postgresql://admin:dev123@localhost:5433/govcontracts"); \
+	PG_PORT=$$(echo $$PG_URL | grep -oP ':\d+/' | tr -d ':/' || echo "5433"); \
+	PG_AVAILABLE=false; \
+	PG_SCALE=""; \
+	if nc -z -w2 localhost $$PG_PORT 2>/dev/null; then \
+		if docker ps --format '{{.Names}}' | grep -q "govcontracts-postgres"; then \
+			echo "✅ PostgreSQL: Using govcontracts-postgres (localhost:$$PG_PORT)"; \
+			PG_AVAILABLE=true; \
+		else \
+			echo "✅ PostgreSQL: External service available (localhost:$$PG_PORT) - will skip local"; \
+			PG_AVAILABLE=true; \
+			PG_SCALE="--scale postgres=0"; \
+		fi; \
+	else \
+		echo "❌ PostgreSQL: Not available - will start local"; \
+	fi; \
+	\
+	REDIS_URL=$$(grep "^REDIS_URL=" .env 2>/dev/null | cut -d= -f2 || echo "redis://localhost:6380"); \
+	REDIS_PORT=$$(echo $$REDIS_URL | grep -oP ':\d+' | tail -1 | tr -d ':' || echo "6380"); \
+	REDIS_AVAILABLE=false; \
+	REDIS_SCALE=""; \
+	if nc -z -w2 localhost $$REDIS_PORT 2>/dev/null; then \
+		if docker ps --format '{{.Names}}' | grep -q "govcontracts-redis"; then \
+			echo "✅ Redis: Using govcontracts-redis (localhost:$$REDIS_PORT)"; \
+			REDIS_AVAILABLE=true; \
+		else \
+			echo "✅ Redis: External service available (localhost:$$REDIS_PORT) - will skip local"; \
+			REDIS_AVAILABLE=true; \
+			REDIS_SCALE="--scale redis=0"; \
+		fi; \
+	else \
+		echo "❌ Redis: Not available - will start local"; \
+	fi; \
+	\
+	MINIO_ENDPOINT=$$(grep "^MINIO_ENDPOINT=" .env 2>/dev/null | cut -d= -f2 || echo "localhost:9000"); \
+	MINIO_HOST=$$(echo $$MINIO_ENDPOINT | cut -d: -f1); \
+	MINIO_PORT=$$(echo $$MINIO_ENDPOINT | cut -d: -f2); \
+	MINIO_AVAILABLE=false; \
+	MINIO_SCALE=""; \
+	if nc -z -w2 $$MINIO_HOST $$MINIO_PORT 2>/dev/null; then \
+		if docker ps --format '{{.Names}}' | grep -q "govcontracts-minio"; then \
+			echo "✅ MinIO: Using govcontracts-minio ($$MINIO_ENDPOINT)"; \
+			MINIO_AVAILABLE=true; \
+		else \
+			echo "✅ MinIO: External service available ($$MINIO_ENDPOINT) - will skip local"; \
+			MINIO_AVAILABLE=true; \
+			MINIO_SCALE="--scale minio=0 --scale minio-init=0"; \
+		fi; \
+	else \
+		echo "❌ MinIO: Not available - will start local"; \
+	fi; \
+	\
+	OPENSEARCH_AVAILABLE=false; \
+	OPENSEARCH_SCALE=""; \
+	if nc -z -w2 localhost 9201 2>/dev/null; then \
+		if docker ps --format '{{.Names}}' | grep -q "govcontracts-opensearch"; then \
+			echo "✅ OpenSearch: Using govcontracts-opensearch (localhost:9201)"; \
+			OPENSEARCH_AVAILABLE=true; \
+		else \
+			echo "✅ OpenSearch: External service available (localhost:9201) - will skip local"; \
+			OPENSEARCH_AVAILABLE=true; \
+			OPENSEARCH_SCALE="--scale opensearch=0 --scale opensearch-dashboards=0"; \
+		fi; \
+	else \
+		echo "❌ OpenSearch: Not available - will start local"; \
+	fi; \
+	\
+	echo ""; \
+	echo "🐳 Starting services..."; \
+	SCALE_ARGS="$$PG_SCALE $$REDIS_SCALE $$MINIO_SCALE $$OPENSEARCH_SCALE"; \
+	if [ -n "$$SCALE_ARGS" ]; then \
+		echo "   Scale options: $$SCALE_ARGS"; \
+		docker compose up -d $$SCALE_ARGS; \
+	else \
+		docker compose up -d; \
+	fi
+	@echo ""
+	@echo "✅ Services running:"
+	@if nc -z -w2 localhost 5433 2>/dev/null; then echo "  - PostgreSQL: localhost:5433"; fi
+	@if nc -z -w2 localhost 6380 2>/dev/null; then echo "  - Redis: localhost:6380"; fi
+	@if nc -z -w2 localhost 5000 2>/dev/null; then echo "  - MLflow: http://localhost:5000"; fi
+	@if nc -z -w2 localhost 9000 2>/dev/null; then echo "  - MinIO API: http://localhost:9000"; fi
+	@if nc -z -w2 localhost 9001 2>/dev/null; then echo "  - MinIO Console: http://localhost:9001"; fi
+	@if nc -z -w2 localhost 8081 2>/dev/null; then echo "  - Airflow: http://localhost:8081"; fi
+	@if nc -z -w2 localhost 9201 2>/dev/null; then echo "  - OpenSearch: http://localhost:9201"; fi
+	@if nc -z -w2 localhost 5602 2>/dev/null; then echo "  - OpenSearch Dashboards: http://localhost:5602"; fi
+
 setup:
 	@echo "Setting up Gov Contracts AI..."
-	docker compose up -d postgres redis minio
+	@ENDPOINT=$$(grep "^MINIO_ENDPOINT=" .env 2>/dev/null | cut -d= -f2 || echo "localhost:9000"); \
+	HOST=$$(echo $$ENDPOINT | cut -d: -f1); \
+	PORT=$$(echo $$ENDPOINT | cut -d: -f2); \
+	if nc -z -w2 $$HOST $$PORT 2>/dev/null; then \
+		echo "✅ MinIO already available - skipping"; \
+		docker compose up -d postgres redis; \
+	else \
+		echo "Starting with local MinIO..."; \
+		docker compose --profile minio up -d postgres redis minio; \
+	fi
 	@echo "⏳ Waiting for PostgreSQL to be ready..."
 	@sleep 5
 	docker exec govcontracts-postgres psql -U admin -d govcontracts -c "CREATE DATABASE IF NOT EXISTS mlflow;" || true
