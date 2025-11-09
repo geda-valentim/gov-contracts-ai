@@ -4,6 +4,7 @@ CNPJ Client - Download de dados da Receita Federal.
 Cliente HTTP para baixar dados públicos de CNPJ do site da Receita Federal.
 """
 
+import logging
 import re
 import tempfile
 import zipfile
@@ -12,9 +13,10 @@ from typing import Optional
 from urllib.parse import urljoin
 
 import requests
-from loguru import logger
 
 from backend.app.domains.cnpj import CNPJEntityType
+
+logger = logging.getLogger(__name__)
 
 
 class CNPJClient:

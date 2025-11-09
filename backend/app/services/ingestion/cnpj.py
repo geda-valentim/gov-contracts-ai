@@ -8,16 +8,18 @@ Serviço responsável por:
 4. Gerenciar versionamento
 """
 
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
-from loguru import logger
 
 from backend.app.core.cnpj_client import CNPJClient
 from backend.app.core.storage_client import get_storage_client
 from backend.app.domains.cnpj import CNPJEntityType
+
+logger = logging.getLogger(__name__)
 
 
 class CNPJIngestionService:
