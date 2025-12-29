@@ -5,14 +5,20 @@ Fetches items (itens) and documents (arquivos) for contratacoes in batches.
 Uses auto-resume to continue from last checkpoint.
 
 INCREMENTAL PROCESSING:
-- Processes contratacoes in batches (e.g., 100 per hour)
+- Processes contratacoes in batches (e.g., 100 per run)
 - Auto-resumes from last checkpoint
-- Separate state for itens and arquivos
+- Saves chunks directly to Bronze (chunk_0001.parquet, chunk_0002.parquet, etc.)
+- State tracking for itens and arquivos separately
 - Safe re-runs with idempotent operations
 
-Schedule: Every hour (or custom interval)
+Schedule: Every 15 minutes
 Data: Batch of unprocessed contratacoes from current day
-Output: JSON with nested structure (appended to daily file)
+Output: Parquet chunks with nested structure (itens, arquivos per contratacao)
+
+Tasks:
+1. fetch_details_batch: Process batch and save directly to Bronze as chunks
+2. validate_ingestion: Validate processing completed successfully
+3. cleanup_temp_files: Clean up any temporary files
 """
 
 import sys
@@ -31,7 +37,7 @@ except ImportError:
     from airflow.operators.python import PythonOperator
 
 # Import standalone services (no Airflow dependencies)
-from backend.app.core.storage_client import get_storage_client
+from backend.app.core.storage_client import get_storage_client  # Used in cleanup
 from backend.app.services.ingestion.pncp_details import PNCPDetailsIngestionService
 
 # Import centralized date utilities
@@ -60,15 +66,12 @@ def fetch_details_batch(**context) -> dict:
     1. Reads contratacoes from Bronze
     2. Filters out already processed (auto-resume)
     3. Processes next batch (e.g., 100 contratacoes)
-    4. Saves data to temp storage
+    4. Saves data directly to Bronze as chunks (no temp storage needed)
     """
     # Get execution date using centralized utility (handles timezone conversion)
     execution_date = get_execution_date(context)
 
     dag_run = context.get("dag_run")
-    execution_id = (
-        dag_run.run_id if dag_run else execution_date.strftime("%Y%m%d_%H%M%S")
-    )
 
     # Get batch size from DAG conf if provided
     batch_size = BATCH_SIZE
@@ -78,6 +81,7 @@ def fetch_details_batch(**context) -> dict:
     print(f"🔄 Auto-resume mode: processing batch of {batch_size} contratacoes")
 
     # Call standalone service with auto-resume
+    # Service saves chunks directly to Bronze - no temp storage needed
     service = PNCPDetailsIngestionService()
     result = service.fetch_details_for_date(
         execution_date=execution_date,
@@ -85,34 +89,30 @@ def fetch_details_batch(**context) -> dict:
         auto_resume=True,  # ✅ Auto-resume enabled
     )
 
-    # Check if there's data to process
-    if not result["data"]:
+    metadata = result["metadata"]
+    contratacoes_processed = metadata.get("contratacoes_processed", 0)
+
+    # Check if data was processed (service saves directly to Bronze)
+    if contratacoes_processed == 0:
         reason = "no_data"
-        if result["metadata"].get("resume_stats"):
+        if metadata.get("resume_stats"):
             reason = "all_processed"
 
         print(f"⚠️  No data to process: {reason}")
         return {
             "has_data": False,
             "reason": reason,
-            "metadata": result["metadata"],
+            "metadata": metadata,
         }
 
-    # ✅ Save data to temp storage
-    storage = get_storage_client()
-    temp_key = storage.upload_temp(
-        data=result["data"],
-        execution_id=execution_id,
-        stage="batch_details",
-        format="json",
-    )
-
+    # Data was processed and saved directly to Bronze by the service
     print(
-        f"📦 Processed batch: {len(result['data'])} contratacoes "
-        f"({result['metadata']['total_itens']} itens, {result['metadata']['total_arquivos']} arquivos)"
+        f"📦 Processed batch: {contratacoes_processed} contratacoes "
+        f"({metadata['total_itens']} itens, {metadata['total_arquivos']} arquivos)"
     )
+    print(f"💾 Chunks saved: {metadata.get('chunks_saved', 0)}")
 
-    remaining = result["metadata"].get("remaining_contratacoes", 0)
+    remaining = metadata.get("remaining_contratacoes", 0)
     if remaining > 0:
         print(f"📋 Remaining: {remaining} contratacoes for future runs")
     else:
@@ -120,104 +120,55 @@ def fetch_details_batch(**context) -> dict:
 
     return {
         "has_data": True,
-        "temp_key": temp_key,
-        "metadata": result["metadata"],
-        "contratacoes_count": len(result["data"]),
-    }
-
-
-def append_to_bronze(**context) -> dict:
-    """
-    Airflow task wrapper: Append batch to daily Bronze Parquet file.
-
-    Reads existing daily file (if any) and appends new batch.
-    """
-    from backend.app.services.ingestion.pncp_details import (
-        convert_nested_to_dataframe,
-        save_to_parquet_bronze,
-    )
-
-    task_instance = context["task_instance"]
-    # Get execution date using centralized utility (handles timezone conversion)
-    execution_date = get_execution_date(context)
-
-    # Get batch result
-    batch_result = task_instance.xcom_pull(task_ids="fetch_details_batch")
-
-    if not batch_result or not batch_result.get("has_data"):
-        reason = batch_result.get("reason", "unknown") if batch_result else "no_result"
-        print(f"⚠️  No data to append: {reason}")
-        return {"appended": False, "reason": reason}
-
-    # Read batch data from temp
-    storage = get_storage_client()
-    batch_data = storage.read_json_from_s3(
-        bucket=storage.BUCKET_BRONZE, key=batch_result["temp_key"]
-    )
-
-    # Convert to DataFrame
-    batch_df = convert_nested_to_dataframe(batch_data)
-
-    # Save with append mode (handles existing file automatically)
-    details_key = save_to_parquet_bronze(
-        df=batch_df,
-        storage_client=storage,
-        execution_date=execution_date,
-        mode="append",
-    )
-
-    # Get total count from parquet file
-    try:
-        client = getattr(storage, '_client', storage)
-        final_df = client.read_parquet_from_s3(
-            bucket_name=storage.BUCKET_BRONZE, object_name=details_key
-        )
-        total_count = len(final_df)
-    except Exception:
-        total_count = len(batch_df)
-
-    print(
-        f"✅ Appended to Bronze: {details_key} "
-        f"(+{len(batch_df)} contratacoes, total: {total_count})"
-    )
-
-    return {
-        "appended": True,
-        "s3_key": details_key,
-        "batch_size": len(batch_df),
-        "total_contratacoes": total_count,
+        "metadata": metadata,
+        "contratacoes_processed": contratacoes_processed,
+        "chunks_saved": metadata.get("chunks_saved", 0),
     }
 
 
 def validate_ingestion(**context) -> dict:
     """
-    Airflow task wrapper: Validate batch append.
+    Airflow task wrapper: Validate batch processing.
+
+    Validates that the fetch task completed successfully.
+    Data is saved directly to Bronze by the service (no append step needed).
     """
     task_instance = context["task_instance"]
 
-    append_result = task_instance.xcom_pull(task_ids="append_to_bronze")
+    fetch_result = task_instance.xcom_pull(task_ids="fetch_details_batch")
 
-    if not append_result or not append_result.get("appended"):
-        reason = append_result.get("reason", "unknown") if append_result else "no_result"
+    if not fetch_result:
+        print("❌ Validation failed: no result from fetch task")
+        raise ValueError("No result from fetch_details_batch task")
 
-        # Acceptable reasons
+    # Check if data was processed
+    if not fetch_result.get("has_data"):
+        reason = fetch_result.get("reason", "unknown")
+
+        # Acceptable reasons - no data to process
         if reason in ["no_data", "all_processed"]:
             print(f"✅ Validation passed: {reason} (acceptable)")
             return {"validation": "passed", "reason": reason}
         else:
             print(f"❌ Validation failed: {reason}")
-            raise ValueError(f"Append failed: {reason}")
+            raise ValueError(f"Fetch failed: {reason}")
 
-    # Check batch size
-    batch_size = append_result.get("batch_size", 0)
-    total = append_result.get("total_contratacoes", 0)
+    # Data was processed successfully
+    contratacoes_processed = fetch_result.get("contratacoes_processed", 0)
+    chunks_saved = fetch_result.get("chunks_saved", 0)
+    metadata = fetch_result.get("metadata", {})
 
-    print(f"✅ Validation passed: +{batch_size} contratacoes (total: {total})")
+    print(
+        f"✅ Validation passed: {contratacoes_processed} contratacoes processed, "
+        f"{chunks_saved} chunks saved"
+    )
 
     return {
         "validation": "passed",
-        "batch_size": batch_size,
-        "total_contratacoes": total,
+        "contratacoes_processed": contratacoes_processed,
+        "chunks_saved": chunks_saved,
+        "total_itens": metadata.get("total_itens", 0),
+        "total_arquivos": metadata.get("total_arquivos", 0),
     }
 
 
@@ -259,25 +210,19 @@ with DAG(
     tags=["bronze", "pncp", "details", "hourly", "auto-resume"],
 ) as dag:
 
-    # Task 1: Fetch batch with auto-resume
+    # Task 1: Fetch batch with auto-resume (saves directly to Bronze)
     task_fetch_batch = PythonOperator(
         task_id="fetch_details_batch",
         python_callable=fetch_details_batch,
     )
 
-    # Task 2: Append to Bronze daily file
-    task_append = PythonOperator(
-        task_id="append_to_bronze",
-        python_callable=append_to_bronze,
-    )
-
-    # Task 3: Validate append
+    # Task 2: Validate processing
     task_validate = PythonOperator(
         task_id="validate_ingestion",
         python_callable=validate_ingestion,
     )
 
-    # Task 4: Cleanup temp files
+    # Task 3: Cleanup temp files
     task_cleanup = PythonOperator(
         task_id="cleanup_temp_files",
         python_callable=cleanup_temp_files,
@@ -285,4 +230,5 @@ with DAG(
     )
 
     # Define task dependencies
-    task_fetch_batch >> task_append >> task_validate >> task_cleanup
+    # Note: append_to_bronze was removed - service saves chunks directly
+    task_fetch_batch >> task_validate >> task_cleanup

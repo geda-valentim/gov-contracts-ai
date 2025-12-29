@@ -348,7 +348,8 @@ class PNCPDetailsIngestionService:
         total_arquivos = 0
         api_calls = 0
         errors = 0
-        chunks_saved = 0
+        # ✅ Start from last existing chunk to avoid overwriting
+        chunks_saved = self._get_next_chunk_number(execution_date) - 1
 
         for idx, contratacao in enumerate(contratacoes, 1):
             try:
@@ -637,6 +638,55 @@ class PNCPDetailsIngestionService:
         }
 
         return enriched, stats
+
+    def _get_next_chunk_number(self, execution_date: datetime) -> int:
+        """
+        Discover existing chunks for a date and return next chunk number.
+
+        This ensures chunks are numbered sequentially across multiple DAG executions,
+        preventing overwriting of existing chunks.
+
+        Args:
+            execution_date: Date to check for existing chunks
+
+        Returns:
+            Next chunk number (max_existing + 1, or 1 if none exist)
+        """
+        import re
+
+        year = execution_date.year
+        month = execution_date.month
+        day = execution_date.day
+        prefix = f"pncp_details/year={year}/month={month:02d}/day={day:02d}/"
+
+        try:
+            objects = self.storage_client.list_objects(
+                bucket=self.storage_client.BUCKET_BRONZE,
+                prefix=prefix,
+            )
+        except Exception as e:
+            logger.warning(f"Could not list existing chunks: {e}. Starting from 1.")
+            return 1
+
+        chunk_pattern = r"chunk_(\d{4})\.parquet"
+        chunk_numbers = []
+
+        for obj in objects:
+            filename = obj["Key"].split("/")[-1]
+            match = re.match(chunk_pattern, filename)
+            if match:
+                chunk_numbers.append(int(match.group(1)))
+
+        if chunk_numbers:
+            next_num = max(chunk_numbers) + 1
+            logger.info(
+                f"Found {len(chunk_numbers)} existing chunks (max: {max(chunk_numbers)}). "
+                f"Next chunk: {next_num}"
+            )
+            return next_num
+        else:
+            logger.info("No existing chunks found. Starting from 1.")
+            return 1
 
     def _save_chunk(
         self,
