@@ -772,47 +772,28 @@ class PNCPDetailsIngestionService:
             # Don't raise - chunk failure shouldn't stop processing
 
     @staticmethod
-    def build_composite_key(cnpj: str, ano: int, sequencial: int) -> str:
-        """
-        Build composite key for state management.
-
-        Args:
-            cnpj: CNPJ do órgão
-            ano: Ano da compra
-            sequencial: Número sequencial
-
-        Returns:
-            Composite key string
-
-        Example:
-            >>> PNCPDetailsIngestionService.build_composite_key(
-            ...     "83102277000152", 2025, 423
-            ... )
-            '83102277000152|2025|423'
-        """
-        return f"{cnpj}|{ano}|{sequencial}"
-
-    @staticmethod
     def extract_key_from_contratacao(contratacao: Dict) -> Optional[str]:
         """
-        Extract composite key from contratacao dict.
+        Extract unique key from contratacao dict for state management.
+
+        Uses numeroControlePNCP directly as the unique identifier.
+        This is more robust than building composite keys from nested fields
+        (like orgaoEntidade.cnpj) which may be serialized differently in parquet.
 
         Args:
             contratacao: Contratacao dict
 
         Returns:
-            Composite key or None if missing fields
-        """
-        cnpj = contratacao.get("cnpj") or contratacao.get("orgaoEntidade", {}).get(
-            "cnpj"
-        )
-        ano = contratacao.get("anoCompra")
-        sequencial = contratacao.get("sequencialCompra")
+            numeroControlePNCP string or None if not found
 
-        if cnpj and ano and sequencial:
-            return PNCPDetailsIngestionService.build_composite_key(
-                cnpj, ano, sequencial
-            )
+        Example:
+            >>> contratacao = {'numeroControlePNCP': '07811946000187-1-000001/2024'}
+            >>> PNCPDetailsIngestionService.extract_key_from_contratacao(contratacao)
+            '07811946000187-1-000001/2024'
+        """
+        key = contratacao.get("numeroControlePNCP")
+        if key and isinstance(key, str) and len(key) > 0:
+            return key
         return None
 
 
