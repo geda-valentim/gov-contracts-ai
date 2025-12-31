@@ -348,6 +348,7 @@ class PNCPDetailsIngestionService:
         total_arquivos = 0
         api_calls = 0
         errors = 0
+
         # ✅ Start from last existing chunk to avoid overwriting
         chunks_saved = self._get_next_chunk_number(execution_date) - 1
 
@@ -687,6 +688,151 @@ class PNCPDetailsIngestionService:
         else:
             logger.info("No existing chunks found. Starting from 1.")
             return 1
+
+    def consolidate_and_deduplicate(self, execution_date: datetime) -> dict:
+        """
+        Consolidate all chunks for a date into a single file and remove duplicates.
+
+        This method:
+        1. Reads all existing parquet files (chunks + details.parquet)
+        2. Concatenates into a single DataFrame
+        3. Removes duplicates based on numeroControlePNCP (keeps first)
+        4. Saves as a single details.parquet file
+        5. Deletes old chunk files
+
+        Should be called after backfill operations to clean up duplicates.
+
+        Args:
+            execution_date: Date to consolidate
+
+        Returns:
+            Dict with consolidation stats
+        """
+        import io
+        import pandas as pd
+
+        year = execution_date.year
+        month = execution_date.month
+        day = execution_date.day
+        prefix = f"pncp_details/year={year}/month={month:02d}/day={day:02d}/"
+
+        try:
+            objects = self.storage_client.list_objects(
+                bucket=self.storage_client.BUCKET_BRONZE,
+                prefix=prefix,
+            )
+        except Exception as e:
+            logger.warning(f"Could not list existing files: {e}")
+            return {"consolidated": False, "error": str(e)}
+
+        # Filter only parquet files
+        parquet_files = [
+            obj["Key"] for obj in objects if obj["Key"].endswith(".parquet")
+        ]
+
+        if not parquet_files:
+            logger.info(f"No data files to consolidate for {execution_date.date()}")
+            return {"consolidated": False, "reason": "no_files"}
+
+        if len(parquet_files) == 1 and parquet_files[0].endswith("details.parquet"):
+            logger.info(f"Already consolidated for {execution_date.date()}")
+            return {"consolidated": False, "reason": "already_consolidated"}
+
+        # Read all parquet files
+        logger.info(f"Reading {len(parquet_files)} files for consolidation...")
+        dfs = []
+        for key in parquet_files:
+            try:
+                df = self.storage_client.read_parquet_from_s3(
+                    bucket=self.storage_client.BUCKET_BRONZE,
+                    key=key,
+                )
+                dfs.append(df)
+            except Exception as e:
+                logger.warning(f"Failed to read {key}: {e}")
+
+        if not dfs:
+            return {"consolidated": False, "error": "no_readable_files"}
+
+        # Concatenate and deduplicate
+        combined = pd.concat(dfs, ignore_index=True)
+        total_before = len(combined)
+
+        # Deduplicate by numeroControlePNCP (keep first occurrence)
+        if "numeroControlePNCP" in combined.columns:
+            deduped = combined.drop_duplicates(
+                subset=["numeroControlePNCP"], keep="first"
+            )
+        else:
+            deduped = combined.drop_duplicates(keep="first")
+
+        total_after = len(deduped)
+        duplicates_removed = total_before - total_after
+
+        logger.info(
+            f"Deduplication: {total_before} → {total_after} "
+            f"({duplicates_removed} duplicates removed)"
+        )
+
+        # Save as single file
+        new_key = f"{prefix}details.parquet"
+
+        # Convert to parquet bytes
+        buffer = io.BytesIO()
+        deduped.to_parquet(buffer, index=False, compression="snappy")
+        buffer.seek(0)
+
+        # Upload using low-level S3 client
+        try:
+            # Use the underlying client for raw upload
+            if hasattr(self.storage_client, "_client"):
+                self.storage_client._client.s3_client.put_object(
+                    Bucket=self.storage_client.BUCKET_BRONZE,
+                    Key=new_key,
+                    Body=buffer.getvalue(),
+                )
+            else:
+                self.storage_client.s3_client.put_object(
+                    Bucket=self.storage_client.BUCKET_BRONZE,
+                    Key=new_key,
+                    Body=buffer.getvalue(),
+                )
+        except Exception as e:
+            logger.error(f"Failed to save consolidated file: {e}")
+            return {"consolidated": False, "error": str(e)}
+
+        logger.info(f"Saved consolidated file: {new_key}")
+
+        # Delete old chunk files (but not the new details.parquet)
+        deleted_count = 0
+        for key in parquet_files:
+            if key != new_key:
+                try:
+                    self.storage_client.delete_object(
+                        bucket=self.storage_client.BUCKET_BRONZE,
+                        key=key,
+                    )
+                    deleted_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to delete {key}: {e}")
+
+        logger.info(f"Deleted {deleted_count} old chunk files")
+
+        result = {
+            "consolidated": True,
+            "total_before": total_before,
+            "total_after": total_after,
+            "duplicates_removed": duplicates_removed,
+            "chunks_deleted": deleted_count,
+            "output_file": new_key,
+        }
+
+        print(
+            f"✅ Consolidation complete: {total_after} unique records "
+            f"({duplicates_removed} duplicates removed)"
+        )
+
+        return result
 
     def _save_chunk(
         self,

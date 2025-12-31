@@ -226,6 +226,20 @@ class StorageClient(ABC):
         """
         pass
 
+    @abstractmethod
+    def delete_object(self, bucket: str, key: str) -> bool:
+        """
+        Delete a single object from storage.
+
+        Args:
+            bucket: Bucket name
+            key: Object key to delete
+
+        Returns:
+            True if deleted successfully
+        """
+        pass
+
 
 class MinIOStorageClient(StorageClient):
     """
@@ -291,6 +305,10 @@ class MinIOStorageClient(StorageClient):
 
     def cleanup_temp(self, execution_id, bucket=None):
         return self._client.cleanup_temp(execution_id, bucket)
+
+    def delete_object(self, bucket, key):
+        """Delete a single object from storage."""
+        return self._client.delete_object(bucket, key)
 
 
 class S3StorageClient(StorageClient):
@@ -588,6 +606,15 @@ class S3StorageClient(StorageClient):
             print(f"Warning: Failed to cleanup temp files: {e}")
 
         return deleted
+
+    def delete_object(self, bucket, key):
+        """Delete a single object from S3."""
+        try:
+            self.s3_client.delete_object(Bucket=bucket, Key=key)
+            return True
+        except Exception as e:
+            print(f"Warning: Failed to delete {key}: {e}")
+            return False
 
 
 def get_storage_client(
